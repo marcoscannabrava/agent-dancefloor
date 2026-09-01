@@ -1,4 +1,4 @@
-//! The right-hand pane: four views over the selected session.
+//! The right-hand pane: five views over the selected session.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
@@ -52,6 +52,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Tab::Agents => draw_agents(frame, session, content),
         Tab::Prompt => draw_prompt(frame, session, content),
         Tab::Usage => draw_usage(frame, app, session, content),
+        Tab::Activity => super::activity::draw(frame, session, content),
     }
 }
 

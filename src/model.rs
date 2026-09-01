@@ -13,6 +13,13 @@ pub const PROMPT_CHARS_MAX: usize = 4000;
 /// and the chunk size that search steps in.
 pub const PROMPT_SEARCH_BYTES_MAX: u64 = 16 * 1024 * 1024;
 pub const PROMPT_SEARCH_CHUNK_BYTES: u64 = 1024 * 1024;
+/// How much of the activity stream to keep. The tail holds thousands of tool
+/// calls; the pane answers "what now", so only the newest few matter.
+pub const TOOL_CALLS_MAX: usize = 24;
+pub const FILES_EDITED_MAX: usize = 12;
+/// A `command` input runs to thousands of characters. This bounds what is held;
+/// the pane cuts again to whatever one row fits.
+pub const TOOL_TARGET_CHARS_MAX: usize = 160;
 
 /// The model id Claude Code writes on assistant messages it generated locally,
 /// such as "No response requested." after an interrupt. They carry all-zero
@@ -114,6 +121,81 @@ pub struct TailTotals {
     pub web_searches: u64,
 }
 
+/// What is steering the newest turn, when anything is. A skill frames a whole
+/// turn and an MCP tool is one call inside it, so the two never both apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Driver {
+    Skill(String),
+    McpTool(String),
+}
+
+impl Driver {
+    pub fn label(&self) -> String {
+        match self {
+            Driver::Skill(name) => format!("skill {name}"),
+            Driver::McpTool(name) => format!("mcp {name}"),
+        }
+    }
+}
+
+/// A finished turn, as Claude Code measured it.
+#[derive(Debug, Clone, Copy)]
+pub struct Turn {
+    pub duration_ms: u64,
+    pub messages: u64,
+}
+
+/// One tool the session ran, and the single input that says what it was aimed
+/// at: the description of a Bash command, the path of an edit, the pattern of a
+/// search.
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    pub name: String,
+    pub target: String,
+}
+
+/// What the session is doing, as opposed to what it is configured as. Empty is
+/// a normal state: a session that has only just started has none of this yet.
+#[derive(Debug, Clone, Default)]
+pub struct Activity {
+    /// The recap Claude writes when the user walks away. A `/config` toggle, so
+    /// most sessions never have one.
+    pub recap: Option<String>,
+    pub driver: Option<Driver>,
+    /// The turn that just ended, not the one running now.
+    pub last_turn: Option<Turn>,
+    /// Oldest first, so the pane can read it back newest first.
+    pub tools: Vec<ToolCall>,
+    /// Files the session edited, each listed once, oldest edit first.
+    pub files: Vec<PathBuf>,
+}
+
+impl Activity {
+    pub fn is_empty(&self) -> bool {
+        self.recap.is_none()
+            && self.driver.is_none()
+            && self.last_turn.is_none()
+            && self.tools.is_empty()
+            && self.files.is_empty()
+    }
+
+    /// Newest wins, and a repeat edit moves the file up rather than doubling it.
+    pub fn record_file(&mut self, path: PathBuf) {
+        self.files.retain(|seen| *seen != path);
+        self.files.push(path);
+        if self.files.len() > FILES_EDITED_MAX {
+            self.files.remove(0);
+        }
+    }
+
+    pub fn record_tool(&mut self, call: ToolCall) {
+        self.tools.push(call);
+        if self.tools.len() > TOOL_CALLS_MAX {
+            self.tools.remove(0);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Worktree {
     pub name: String,
@@ -162,6 +244,7 @@ pub struct Detail {
     pub worktree: Option<Worktree>,
     pub pull_request: Option<PullRequest>,
     pub last_prompt: Option<String>,
+    pub activity: Activity,
     pub subagents: Vec<Subagent>,
     /// Set when the transcript exists but could not be read or parsed.
     pub read_error: Option<String>,

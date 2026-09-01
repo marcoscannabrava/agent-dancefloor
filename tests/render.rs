@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use dancefloor::app::{App, Tab};
 use dancefloor::model::{
-    ContextUsage, Detail, ProcStat, PullRequest, Session, Status, Subagent, TailTotals, Worktree,
+    Activity, ContextUsage, Detail, Driver, ProcStat, PullRequest, Session, Status, Subagent,
+    TailTotals, ToolCall, Turn, Worktree,
 };
 use dancefloor::ui;
 use ratatui::backend::TestBackend;
@@ -72,6 +73,27 @@ fn populated_session() -> Session {
                 repository: "example/repo".into(),
             }),
             last_prompt: Some("add a pane for subagents".into()),
+            activity: Activity {
+                recap: Some("Added the pane and wired its key. Next: run the tests.".into()),
+                driver: Some(Driver::Skill("pstack:poteto-mode".into())),
+                last_turn: Some(Turn {
+                    duration_ms: 418_374,
+                    messages: 135,
+                }),
+                tools: vec![
+                    ToolCall {
+                        name: "Edit".into(),
+                        target: "/Users/someone/code/dancefloor/src/ui/activity.rs".into(),
+                    },
+                    ToolCall {
+                        name: "Bash".into(),
+                        target: "Run the test suite".into(),
+                    },
+                ],
+                files: vec![PathBuf::from(
+                    "/Users/someone/code/dancefloor/src/ui/activity.rs",
+                )],
+            },
             subagents: vec![Subagent {
                 name: "code-review".into(),
                 agent_type: "general-purpose".into(),
@@ -190,6 +212,51 @@ fn a_long_window_is_believed_before_usage_proves_it() {
         screen.contains("169k / 200k~"),
         "sonnet wrongly widened:\n{screen}"
     );
+}
+
+/// The pane has to carry a session with no recap, which is most of them.
+#[test]
+fn the_activity_pane_shows_the_live_stream() {
+    let mut app = app_with(vec![populated_session()]);
+    app.tab = Tab::Activity;
+
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("Next: run the tests"), "recap missing:\n{screen}");
+    assert!(
+        screen.contains("pstack:poteto-mode"),
+        "driver missing:\n{screen}"
+    );
+    assert!(screen.contains("135 messages"), "turn missing:\n{screen}");
+    // Newest first, so the Bash call sits above the Edit that preceded it.
+    let bash = screen.find("Run the test suite").expect("bash call");
+    let edit = screen.find("Edit ").expect("edit call");
+    assert!(bash < edit, "tools not newest first:\n{screen}");
+    // The edited file is shown relative to the session's own directory.
+    assert!(
+        screen.contains("src/ui/activity.rs"),
+        "file missing:\n{screen}"
+    );
+
+    let mut bare = populated_session();
+    bare.detail.activity.recap = None;
+    let mut app = app_with(vec![bare]);
+    app.tab = Tab::Activity;
+    let screen = render(&app, 140, 40);
+    assert!(
+        screen.contains("Run the test suite"),
+        "pane empty without a recap:\n{screen}"
+    );
+}
+
+#[test]
+fn an_activity_free_session_says_so() {
+    let mut session = populated_session();
+    session.detail.activity = Activity::default();
+    let mut app = app_with(vec![session]);
+    app.tab = Tab::Activity;
+
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("Nothing recorded"), "hint missing:\n{screen}");
 }
 
 #[test]

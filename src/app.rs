@@ -13,10 +13,17 @@ pub enum Tab {
     Agents,
     Prompt,
     Usage,
+    Activity,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Detail, Tab::Agents, Tab::Prompt, Tab::Usage];
+    pub const ALL: [Tab; 5] = [
+        Tab::Detail,
+        Tab::Agents,
+        Tab::Prompt,
+        Tab::Usage,
+        Tab::Activity,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -24,6 +31,7 @@ impl Tab {
             Tab::Agents => "Agents",
             Tab::Prompt => "Prompt",
             Tab::Usage => "Usage",
+            Tab::Activity => "Activity",
         }
     }
 

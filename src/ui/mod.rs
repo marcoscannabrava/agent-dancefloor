@@ -1,5 +1,6 @@
 //! Screen layout: a header, the session list beside the detail pane, a footer.
 
+mod activity;
 mod detail;
 mod list;
 
@@ -124,7 +125,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = [
         ("j/k", "move"),
         ("tab", "pane"),
-        ("1-4", "jump"),
+        ("1-5", "jump"),
         ("s", "sort"),
         ("r", "refresh"),
         ("?", "help"),
@@ -152,7 +153,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         label_value("k / ↑", "previous session"),
         label_value("tab / l", "next pane"),
         label_value("shift-tab", "previous pane"),
-        label_value("1 2 3 4", "Detail / Agents / Prompt / Usage"),
+        label_value("1 - 5", "Detail / Agents / Prompt / Usage / Activity"),
         label_value("s", "cycle sort order"),
         label_value("r", "refresh now"),
         label_value("? ", "close this help"),

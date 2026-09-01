@@ -87,6 +87,7 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('2') => app.tab = Tab::Agents,
         KeyCode::Char('3') => app.tab = Tab::Prompt,
         KeyCode::Char('4') => app.tab = Tab::Usage,
+        KeyCode::Char('5') => app.tab = Tab::Activity,
         KeyCode::Char('s') => app.cycle_sort(),
         KeyCode::Char('r') => app.refresh(),
         KeyCode::Char('?') => app.show_help = true,
@@ -196,7 +197,7 @@ OPTIONS:
 KEYS:
     j k        move between sessions
     tab        next pane, shift-tab previous
-    1 2 3 4    Detail, Agents, Prompt, Usage
+    1 - 5      Detail, Agents, Prompt, Usage, Activity
     s          cycle sort order
     r          refresh now
     ?          help
