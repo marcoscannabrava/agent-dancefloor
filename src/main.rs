@@ -104,13 +104,13 @@ fn print_snapshot(app: &App) {
         return;
     }
     println!(
-        "{:<7} {:<20} {:<18} {:>5}  {:<16} {:>8}",
+        "{:<8} {:<20} {:<18} {:>5}  {:<16} {:>8}",
         "STATUS", "NAME", "DIR", "CTX", "MODEL", "UP"
     );
     let now = App::now_ms();
     for session in &app.sessions {
         println!(
-            "{:<7} {:<20} {:<18} {:>4.0}%  {:<16} {:>8}",
+            "{:<8} {:<20} {:<18} {:>4.0}%  {:<16} {:>8}",
             session.status.label(),
             truncate(&session.name, 20),
             truncate(&session.dir_label(), 18),

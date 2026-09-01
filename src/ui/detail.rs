@@ -7,8 +7,8 @@ use ratatui::widgets::{Block, Gauge, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Tab};
-use crate::model::{duration_short, tokens_short, Session};
-use crate::ui::{context_color, label_value, ACCENT, LABEL};
+use crate::model::{duration_short, tokens_short, Session, Status};
+use crate::ui::{context_color, label_value, status_color, ACCENT, LABEL};
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::bordered().border_style(Style::new().fg(LABEL));
@@ -74,8 +74,14 @@ fn heading_lines(session: &Session) -> Vec<Line<'static>> {
         Line::from(vec![
             Span::styled(session.name.clone(), Style::new().fg(ACCENT).bold()),
             Span::styled(
-                format!("  {} {}", session.status.glyph(), session.status.label()),
-                Style::new().fg(LABEL),
+                format!("  {} {}", session.status.glyph(), session.status.description()),
+                // The waiting state is the reason to open this pane at all, so it
+                // is coloured rather than left in label grey.
+                if session.status == Status::Waiting {
+                    Style::new().fg(status_color(session.status)).bold()
+                } else {
+                    Style::new().fg(LABEL)
+                },
             ),
             Span::styled(
                 session

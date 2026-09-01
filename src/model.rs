@@ -28,8 +28,11 @@ pub const CONTEXT_LIMIT_LONG: u64 = 1_000_000;
 /// The suffix Claude Code puts on a long-context model id.
 pub const LONG_CONTEXT_SUFFIX: &str = "[1m]";
 
+/// Declaration order is the sort order: a session waiting on the user is the
+/// one that needs attention, so it sorts above everything else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
+    Waiting,
     Busy,
     Idle,
     Other,
@@ -38,14 +41,18 @@ pub enum Status {
 impl Status {
     pub fn parse(raw: &str) -> Self {
         match raw {
+            "waiting" => Status::Waiting,
             "busy" => Status::Busy,
             "idle" => Status::Idle,
             _ => Status::Other,
         }
     }
 
+    /// Two cells wide for a waiting session, because a circle alone is too easy
+    /// to miss in a column of dots; the question mark is what carries the state.
     pub fn glyph(self) -> &'static str {
         match self {
+            Status::Waiting => "●?",
             Status::Busy => "●",
             Status::Idle => "○",
             Status::Other => "·",
@@ -54,9 +61,19 @@ impl Status {
 
     pub fn label(self) -> &'static str {
         match self {
+            Status::Waiting => "waiting",
             Status::Busy => "busy",
             Status::Idle => "idle",
             Status::Other => "?",
+        }
+    }
+
+    /// The long form, for the detail pane where there is room to say what the
+    /// session is waiting on.
+    pub fn description(self) -> &'static str {
+        match self {
+            Status::Waiting => "waiting for input",
+            other => other.label(),
         }
     }
 }
