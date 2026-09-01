@@ -48,13 +48,19 @@ dancefloor --context-limit 1000000  # pin the context window
 
 | Key         | Action                              |
 | ----------- | ----------------------------------- |
-| `j` `k`     | Move between sessions               |
+| `j` `k` `↑` `↓` | Move between sessions, or scroll the focused pane |
+| `enter`     | Focus the pane, then open the tool call under the cursor |
+| `esc`       | Back to the session list            |
+| `y`         | Copy an open tool call              |
 | `tab`       | Next pane, `shift-tab` for previous |
-| `1` to `5` | Jump to Detail, Agents, Prompt, Usage, Activity |
+| `1` to `5`  | Jump to Detail, Agents, Prompt, Usage, Activity |
 | `s`         | Cycle the sort order                |
 | `r`         | Refresh now                         |
 | `?`         | Help                                |
 | `q`         | Quit                                |
+
+`enter` moves the keys from the session list into the pane; the coloured border says which
+half has them. `esc` gives them back.
 
 The sort order cycles through status, context, uptime, and directory. Status sorts busy
 sessions first.
@@ -75,8 +81,13 @@ also totals recent activity over the part of the transcript that was read.
 
 **Activity** answers what the session is doing now. It leads with the recap Claude writes when
 you walk away, names the skill or MCP tool that drives the turn, and gives the length of the
-turn that just ended. Under that come the files the session edited and the tools it ran, newest
-first. A recap is a `/config` toggle, so most sessions show the tool stream alone.
+turn that just ended. Under that come the files the session edited and every tool call in the
+part of the transcript that was read, newest first. A recap is a `/config` toggle, so most
+sessions show the tool stream alone.
+
+Each tool row carries both the summary someone wrote for the call and the command itself, cut
+to one row. Press `enter` to focus the pane and scroll the list, `enter` again to open the call
+under the cursor, and `y` to put its full command on the clipboard.
 
 ## Where the data comes from
 
@@ -89,6 +100,7 @@ never writes to your Claude Code state.
 | `~/.claude/projects/<dir>/<session>.jsonl` | Token usage, model, title, branch, permission mode, worktree, pull request, last prompt, and the activity stream |
 | `~/.claude/projects/<dir>/<session>/subagents/` | One `meta.json` per spawned subagent |
 | `ps` | CPU and resident memory per session process |
+| `wl-copy`, `xclip`, `xsel`, or `pbcopy` | Whichever is installed, to copy a tool call |
 
 A registry file outlives the process that wrote it. Every entry is confirmed against `ps`
 before `dancefloor` reports it, so a crashed session disappears on the next refresh.

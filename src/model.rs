@@ -13,13 +13,13 @@ pub const PROMPT_CHARS_MAX: usize = 4000;
 /// and the chunk size that search steps in.
 pub const PROMPT_SEARCH_BYTES_MAX: u64 = 16 * 1024 * 1024;
 pub const PROMPT_SEARCH_CHUNK_BYTES: u64 = 1024 * 1024;
-/// How much of the activity stream to keep. The tail holds thousands of tool
-/// calls; the pane answers "what now", so only the newest few matter.
-pub const TOOL_CALLS_MAX: usize = 24;
+/// The Activity pane scrolls, so it keeps every tool call in the tail. This is
+/// only a ceiling against a pathological file, not the working size.
+pub const TOOL_CALLS_MAX: usize = 2048;
 pub const FILES_EDITED_MAX: usize = 12;
-/// A `command` input runs to thousands of characters. This bounds what is held;
-/// the pane cuts again to whatever one row fits.
-pub const TOOL_TARGET_CHARS_MAX: usize = 160;
+/// A held command has to stay copyable in full, so this cap is set well past any
+/// real one. The pane cuts again to whatever one row fits.
+pub const TOOL_DETAIL_CHARS_MAX: usize = 8000;
 
 /// The model id Claude Code writes on assistant messages it generated locally,
 /// such as "No response requested." after an interrupt. They carry all-zero
@@ -145,13 +145,14 @@ pub struct Turn {
     pub messages: u64,
 }
 
-/// One tool the session ran, and the single input that says what it was aimed
-/// at: the description of a Bash command, the path of an edit, the pattern of a
-/// search.
+/// One tool the session ran. A Bash call carries both a written summary and the
+/// command it summarises, and the pane shows both, so the two are kept apart.
+/// Tools with no summary leave it empty and say everything in `detail`.
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub name: String,
-    pub target: String,
+    pub summary: String,
+    pub detail: String,
 }
 
 /// What the session is doing, as opposed to what it is configured as. Empty is
@@ -164,7 +165,8 @@ pub struct Activity {
     pub driver: Option<Driver>,
     /// The turn that just ended, not the one running now.
     pub last_turn: Option<Turn>,
-    /// Oldest first, so the pane can read it back newest first.
+    /// Oldest first, so the pane can read it back newest first. Every call in
+    /// the tail is kept; the pane scrolls rather than cutting the list.
     pub tools: Vec<ToolCall>,
     /// Files the session edited, each listed once, oldest edit first.
     pub files: Vec<PathBuf>,

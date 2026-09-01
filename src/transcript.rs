@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::model::{
     ContextUsage, Detail, Driver, PullRequest, ToolCall, Turn, Worktree, LONG_CONTEXT_SUFFIX,
     MODEL_SYNTHETIC, PROMPT_CHARS_MAX, PROMPT_SEARCH_BYTES_MAX, PROMPT_SEARCH_CHUNK_BYTES,
-    TOOL_TARGET_CHARS_MAX, TRANSCRIPT_LINES_MAX, TRANSCRIPT_TAIL_BYTES_MAX,
+    TOOL_DETAIL_CHARS_MAX, TRANSCRIPT_LINES_MAX, TRANSCRIPT_TAIL_BYTES_MAX,
 };
 
 /// Find `projects/*/<session_id>.jsonl`.
@@ -300,18 +300,14 @@ fn read_driver(entry: &Value) -> Option<Driver> {
         .or_else(|| named("attributionMcpTool").map(Driver::McpTool))
 }
 
-/// The input keys that say what a call was aimed at, best first. Bash carries
-/// both a `description` and the `command` it summarises, and the summary is the
-/// line worth reading; a file path beats a search pattern for the same reason.
-const TOOL_TARGET_KEYS: [&str; 8] = [
-    "description",
-    "file_path",
-    "pattern",
-    "url",
-    "query",
-    "skill",
-    "command",
-    "prompt",
+/// The key holding a summary someone wrote for the call. Only Bash, Agent and
+/// Monitor carry one.
+const TOOL_SUMMARY_KEY: &str = "description";
+
+/// The input keys naming what a call was aimed at, best first. A file path beats
+/// a search pattern, and a URL beats the prompt sent with it.
+const TOOL_DETAIL_KEYS: [&str; 7] = [
+    "file_path", "pattern", "url", "query", "skill", "command", "prompt",
 ];
 
 fn record_tool_calls(message: &Value, detail: &mut Detail) {
@@ -325,9 +321,18 @@ fn record_tool_calls(message: &Value, detail: &mut Detail) {
         let Some(name) = block.get("name").and_then(Value::as_str) else {
             continue;
         };
+        let input = block.get("input");
         detail.activity.record_tool(ToolCall {
             name: tool_name(name),
-            target: tool_target(block.get("input")),
+            summary: tool_field(input, |map| map.get(TOOL_SUMMARY_KEY).and_then(Value::as_str)),
+            detail: tool_field(input, |map| {
+                TOOL_DETAIL_KEYS
+                    .iter()
+                    .find_map(|key| map.get(*key).and_then(Value::as_str))
+                    // An MCP call matches none of the keys above, so it falls
+                    // back to whatever string it does carry.
+                    .or_else(|| map.values().find_map(Value::as_str))
+            }),
         });
     }
 }
@@ -338,27 +343,20 @@ fn tool_name(raw: &str) -> String {
     raw.rsplit("__").next().unwrap_or(raw).to_string()
 }
 
-/// One line describing the call. Unknown tools, MCP ones especially, fall back
-/// to whatever string input they carry rather than showing nothing.
-fn tool_target(input: Option<&Value>) -> String {
-    let Some(map) = input.and_then(Value::as_object) else {
+/// Pull one input out of a call and flatten it to a single line. A command spans
+/// lines and a prompt spans paragraphs, and both are shown one row at a time.
+fn tool_field<'a>(
+    input: Option<&'a Value>,
+    pick: impl Fn(&'a serde_json::Map<String, Value>) -> Option<&'a str>,
+) -> String {
+    let Some(text) = input.and_then(Value::as_object).and_then(pick) else {
         return String::new();
     };
-    let named = TOOL_TARGET_KEYS
-        .iter()
-        .find_map(|key| map.get(*key).and_then(Value::as_str));
-    let fallback = || map.values().find_map(Value::as_str);
-    let Some(text) = named.or_else(fallback) else {
-        return String::new();
-    };
-
-    // A command spans lines and a prompt spans paragraphs; both have to collapse
-    // to fit one row.
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= TOOL_TARGET_CHARS_MAX {
+    if flat.chars().count() <= TOOL_DETAIL_CHARS_MAX {
         return flat;
     }
-    flat.chars().take(TOOL_TARGET_CHARS_MAX).collect::<String>() + "…"
+    flat.chars().take(TOOL_DETAIL_CHARS_MAX).collect::<String>() + "…"
 }
 
 fn parse_system(entry: &Value, detail: &mut Detail) {
@@ -504,7 +502,7 @@ fn user_prompt_text(entry: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::TOOL_CALLS_MAX;
+    use crate::model::{TOOL_CALLS_MAX, TOOL_DETAIL_CHARS_MAX};
 
     /// A transcript shaped like the real thing: metadata lines, a tool result
     /// that must not be mistaken for a prompt, and a subagent line that must not
@@ -632,12 +630,15 @@ mod tests {
     fn tool_calls_are_kept_in_the_order_they_ran() {
         let activity = activity();
         assert_eq!(activity.tools.len(), 2);
-        // Bash carries both, and the description is the readable half.
+        // Bash carries both, and both are kept: the summary says why the call
+        // ran, and only the command says what it will do.
         assert_eq!(activity.tools[0].name, "Bash");
-        assert_eq!(activity.tools[0].target, "Run the test suite");
+        assert_eq!(activity.tools[0].summary, "Run the test suite");
+        assert_eq!(activity.tools[0].detail, "cargo test --quiet");
         // An MCP tool keeps its last segment and falls back to its only input.
         assert_eq!(activity.tools[1].name, "get_issue");
-        assert_eq!(activity.tools[1].target, "ENG-2766");
+        assert_eq!(activity.tools[1].summary, "");
+        assert_eq!(activity.tools[1].detail, "ENG-2766");
     }
 
     #[test]
@@ -718,15 +719,27 @@ mod tests {
         assert_eq!(detail.activity.tools.len(), TOOL_CALLS_MAX);
     }
 
-    /// A bash command spans lines and runs long; the pane has one row for it.
+    /// A bash command spans lines, and the pane shows it one row at a time.
     #[test]
-    fn a_long_multiline_target_collapses_and_is_cut() {
-        let long = "x".repeat(TOOL_TARGET_CHARS_MAX * 2);
-        let input = serde_json::json!({"command": format!("first\n  second {long}")});
-        let target = tool_target(Some(&input));
-        assert!(!target.contains('\n'));
-        assert_eq!(target.chars().count(), TOOL_TARGET_CHARS_MAX + 1);
-        assert!(target.ends_with('…'));
+    fn a_multiline_command_collapses_to_one_line() {
+        let input = serde_json::json!({"command": "first\n  second\n\tthird"});
+        let detail = tool_field(Some(&input), |map| {
+            map.get("command").and_then(Value::as_str)
+        });
+        assert_eq!(detail, "first second third");
+    }
+
+    /// The open call is copied whole, so what is held has to be the whole thing
+    /// up to a cap set well past any real command.
+    #[test]
+    fn only_a_pathological_command_is_cut() {
+        let long = "x".repeat(TOOL_DETAIL_CHARS_MAX * 2);
+        let input = serde_json::json!({"command": long});
+        let detail = tool_field(Some(&input), |map| {
+            map.get("command").and_then(Value::as_str)
+        });
+        assert_eq!(detail.chars().count(), TOOL_DETAIL_CHARS_MAX + 1);
+        assert!(detail.ends_with('…'));
     }
 
     #[test]
