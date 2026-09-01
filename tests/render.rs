@@ -33,6 +33,7 @@ fn populated_session() -> Session {
             rss_kib: 431_792,
             cpu_percent: 7.3,
         }),
+        configured_model: None,
         detail: Detail {
             transcript: Some(PathBuf::from("/tmp/transcript.jsonl")),
             transcript_age_secs: Some(12),
@@ -46,6 +47,7 @@ fn populated_session() -> Session {
                 output: 811,
             }),
             usage_peak: 120_000,
+            long_context_models: Vec::new(),
             totals: TailTotals {
                 assistant_messages: 86,
                 user_messages: 50,
@@ -144,6 +146,50 @@ fn detail_pane_shows_the_session_facts() {
     // 105_843 of an inferred 200k window, and the ~ must say it was inferred.
     assert!(screen.contains("105k / 200k~"), "context missing:\n{screen}");
     assert!(screen.contains("53%"), "context percentage missing:\n{screen}");
+}
+
+/// The bug this guards: a 1M session under 200k of usage was measured against
+/// the standard window, so 169k read as 85% in alarm red instead of 17%.
+#[test]
+fn a_long_window_is_believed_before_usage_proves_it() {
+    let mut session = populated_session();
+    session.detail.usage = Some(ContextUsage {
+        input: 2,
+        cache_read: 163_349,
+        cache_creation: 5_805,
+        output: 300,
+    });
+    session.detail.usage_peak = 169_456;
+
+    // Nothing names the window yet, so the pane says 200k and marks it a guess.
+    let app = app_with(vec![session.clone()]);
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("169k / 200k~"), "guess missing:\n{screen}");
+    assert!(screen.contains("85%"), "guess percentage missing:\n{screen}");
+
+    // A cost-state line billed this model at [1m], so the guess is over.
+    session.detail.long_context_models = vec!["claude-opus-5".into()];
+    let app = app_with(vec![session.clone()]);
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("169k / 1.0M"), "recorded missing:\n{screen}");
+    assert!(!screen.contains("1.0M~"), "recorded still a guess:\n{screen}");
+    assert!(screen.contains("17%"), "recorded percentage:\n{screen}");
+
+    // Settings alone carry the same weight once the family matches.
+    session.detail.long_context_models.clear();
+    session.configured_model = Some("opus[1m]".into());
+    let app = app_with(vec![session.clone()]);
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("169k / 1.0M"), "configured missing:\n{screen}");
+
+    // ...but not for a session that moved to another model.
+    session.detail.model = Some("claude-sonnet-5".into());
+    let app = app_with(vec![session]);
+    let screen = render(&app, 140, 40);
+    assert!(
+        screen.contains("169k / 200k~"),
+        "sonnet wrongly widened:\n{screen}"
+    );
 }
 
 #[test]

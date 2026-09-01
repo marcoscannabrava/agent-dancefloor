@@ -13,8 +13,8 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::model::{
-    ContextUsage, Detail, PullRequest, Worktree, MODEL_SYNTHETIC, PROMPT_CHARS_MAX,
-    PROMPT_SEARCH_BYTES_MAX,
+    ContextUsage, Detail, PullRequest, Worktree, LONG_CONTEXT_SUFFIX, MODEL_SYNTHETIC,
+    PROMPT_CHARS_MAX, PROMPT_SEARCH_BYTES_MAX,
     PROMPT_SEARCH_CHUNK_BYTES, TRANSCRIPT_LINES_MAX, TRANSCRIPT_TAIL_BYTES_MAX,
 };
 
@@ -220,6 +220,7 @@ fn parse_entry(entry: &Value, detail: &mut Detail, pending: &mut Pending) {
         "mode" => detail.mode = field("mode"),
         "worktree-state" => parse_worktree(entry, detail),
         "pr-link" => parse_pull_request(entry, detail),
+        "cost-state" => parse_cost_state(entry, detail),
         _ => {}
     }
 }
@@ -272,6 +273,24 @@ fn parse_assistant(entry: &Value, detail: &mut Detail) {
 
     detail.usage_peak = detail.usage_peak.max(current.total());
     detail.usage = Some(current);
+}
+
+/// `cost-state` bills each model separately, keyed by the full id with the
+/// `[1m]` suffix intact. It is the one line that names the variant the session
+/// actually runs; assistant messages only ever carry the base id.
+fn parse_cost_state(entry: &Value, detail: &mut Detail) {
+    let Some(billed) = entry.get("modelUsage").and_then(Value::as_object) else {
+        return;
+    };
+    for id in billed.keys() {
+        let Some(base) = id.strip_suffix(LONG_CONTEXT_SUFFIX) else {
+            continue;
+        };
+        if base.is_empty() || detail.long_context_models.iter().any(|seen| seen == base) {
+            continue;
+        }
+        detail.long_context_models.push(base.to_string());
+    }
 }
 
 fn parse_worktree(entry: &Value, detail: &mut Detail) {
@@ -434,6 +453,37 @@ mod tests {
         assert_eq!(detail.model.as_deref(), Some("claude-opus-5"));
         assert_eq!(detail.usage.expect("usage").total(), 2 + 50_000 + 10 + 20);
         assert_eq!(detail.totals.assistant_messages, 2);
+    }
+
+    /// The `[1m]` variant appears nowhere else in the transcript, so this line
+    /// is the only thing standing between a 1M session and a 5x overstated bar.
+    #[test]
+    fn cost_state_names_the_long_context_variant() {
+        let mut lines = fixture();
+        lines.push(
+            r#"{"type":"cost-state","sessionId":"s","totalCostUSD":13.4,"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":924},"claude-opus-5[1m]":{"inputTokens":36627}}}"#
+                .to_string(),
+        );
+
+        let mut detail = Detail::default();
+        parse_lines(&lines, &mut detail);
+
+        // Only the long one, and with the suffix off so it matches `model`.
+        assert_eq!(detail.long_context_models, vec!["claude-opus-5".to_string()]);
+    }
+
+    #[test]
+    fn cost_state_without_a_long_model_records_nothing() {
+        let mut lines = fixture();
+        lines.push(
+            r#"{"type":"cost-state","sessionId":"s","modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":924},"claude-opus-5":{"inputTokens":36627}}}"#
+                .to_string(),
+        );
+
+        let mut detail = Detail::default();
+        parse_lines(&lines, &mut detail);
+
+        assert!(detail.long_context_models.is_empty());
     }
 
     #[test]

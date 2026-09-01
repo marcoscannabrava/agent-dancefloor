@@ -89,6 +89,9 @@ pub fn scan(claude_home: &Path) -> Result<Vec<Session>> {
             started_at_ms: file.started_at.unwrap_or(0),
             status_updated_at_ms: file.status_updated_at.unwrap_or(0),
             proc: Some(stat.clone()),
+            // Both are filled in by the refresh, which knows the settings path
+            // and the transcript.
+            configured_model: None,
             detail: Default::default(),
         });
     }

@@ -208,16 +208,21 @@ fn draw_context_gauge(frame: &mut Frame, app: &App, session: &Session, area: Rec
         .as_ref()
         .map(|u| u.total())
         .unwrap_or(0);
-    let (limit, inferred) = session.context_limit(app.context_limit);
+    let (limit, source) = session.context_limit(app.context_limit);
     let ratio = session.context_ratio(app.context_limit);
 
     // The counts sit in the title and only the percentage rides the bar: a long
     // label centred over a partly-filled gauge is unreadable at either end.
+    // The `~` means nobody said what the window is, so 200k is the fallback.
     let title = Line::from(vec![
         Span::styled(" context  ", Style::new().fg(LABEL)),
         Span::styled(tokens_short(used), Style::new().fg(context_color(ratio))),
         Span::styled(
-            format!(" / {}{}", tokens_short(limit), if inferred { "~" } else { "" }),
+            format!(
+                " / {}{}",
+                tokens_short(limit),
+                if source.is_guess() { "~" } else { "" }
+            ),
             Style::new().fg(LABEL),
         ),
     ]);

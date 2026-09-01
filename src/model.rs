@@ -19,11 +19,14 @@ pub const PROMPT_SEARCH_CHUNK_BYTES: u64 = 1024 * 1024;
 /// usage, so they must not be read as the session's real state.
 pub const MODEL_SYNTHETIC: &str = "<synthetic>";
 
-/// Context windows Claude Code actually ships. The transcript records the base
-/// model id (`claude-opus-5`) even when the session runs the `[1m]` variant, so
-/// the limit cannot be read directly and is inferred from observed usage.
+/// Context windows Claude Code actually ships. Assistant messages record the
+/// base model id (`claude-opus-5`) even on the `[1m]` variant, so the window has
+/// to come from `cost-state` lines, settings, or observed usage.
 pub const CONTEXT_LIMIT_STANDARD: u64 = 200_000;
 pub const CONTEXT_LIMIT_LONG: u64 = 1_000_000;
+
+/// The suffix Claude Code puts on a long-context model id.
+pub const LONG_CONTEXT_SUFFIX: &str = "[1m]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -132,6 +135,9 @@ pub struct Detail {
     /// survives the dip that compaction puts in the latest message.
     pub usage_peak: u64,
     pub totals: TailTotals,
+    /// Model ids a `cost-state` line billed against the long window, with the
+    /// `[1m]` suffix stripped so they compare against `model`.
+    pub long_context_models: Vec<String>,
     pub title: Option<String>,
     pub git_branch: Option<String>,
     pub permission_mode: Option<String>,
@@ -142,6 +148,37 @@ pub struct Detail {
     pub subagents: Vec<Subagent>,
     /// Set when the transcript exists but could not be read or parsed.
     pub read_error: Option<String>,
+}
+
+/// Where a session's context limit came from. Only `Assumed` is a guess, and it
+/// is the only one the panels mark as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitSource {
+    /// `--context-limit`, which outranks anything read from disk.
+    Override,
+    /// Usage already past the standard window, so the long one is a fact.
+    Observed,
+    /// A `cost-state` line billed this session's model at `[1m]`.
+    Recorded,
+    /// Settings name the long variant of the model this session runs.
+    Configured,
+    /// Nothing said otherwise.
+    Assumed,
+}
+
+impl LimitSource {
+    pub fn is_guess(self) -> bool {
+        self == LimitSource::Assumed
+    }
+}
+
+/// Does `configured` name the long variant of `model`? A user-wide `opus[1m]`
+/// must not widen a session that switched to sonnet, so the family matters.
+fn names_long_variant(configured: &str, model: &str) -> bool {
+    let Some(base) = configured.strip_suffix(LONG_CONTEXT_SUFFIX) else {
+        return false;
+    };
+    !base.is_empty() && model.to_lowercase().contains(&base.to_lowercase())
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +194,9 @@ pub struct Session {
     pub started_at_ms: i64,
     pub status_updated_at_ms: i64,
     pub proc: Option<ProcStat>,
+    /// The model settings name for this session's directory. Not proof of what
+    /// the session runs now, but the only clue a young session gives.
+    pub configured_model: Option<String>,
     pub detail: Detail,
 }
 
@@ -193,15 +233,41 @@ impl Session {
         }
     }
 
-    /// The context limit for this session, and whether it had to be inferred.
-    pub fn context_limit(&self, override_limit: Option<u64>) -> (u64, bool) {
+    /// The context limit for this session, and where the number came from.
+    /// Strongest evidence first: measured usage cannot be argued with, a
+    /// `cost-state` line is the session's own record, and settings are only the
+    /// default it started from.
+    pub fn context_limit(&self, override_limit: Option<u64>) -> (u64, LimitSource) {
         if let Some(limit) = override_limit {
-            return (limit, false);
+            return (limit, LimitSource::Override);
         }
         if self.detail.usage_peak > CONTEXT_LIMIT_STANDARD {
-            (CONTEXT_LIMIT_LONG, true)
-        } else {
-            (CONTEXT_LIMIT_STANDARD, true)
+            return (CONTEXT_LIMIT_LONG, LimitSource::Observed);
+        }
+        if self.recorded_long() {
+            return (CONTEXT_LIMIT_LONG, LimitSource::Recorded);
+        }
+        if self.configured_long() {
+            return (CONTEXT_LIMIT_LONG, LimitSource::Configured);
+        }
+        (CONTEXT_LIMIT_STANDARD, LimitSource::Assumed)
+    }
+
+    /// Was this session's current model billed against the long window?
+    fn recorded_long(&self) -> bool {
+        let Some(model) = self.detail.model.as_deref() else {
+            return false;
+        };
+        self.detail
+            .long_context_models
+            .iter()
+            .any(|billed| billed == model)
+    }
+
+    fn configured_long(&self) -> bool {
+        match (self.configured_model.as_deref(), self.detail.model.as_deref()) {
+            (Some(configured), Some(model)) => names_long_variant(configured, model),
+            _ => false,
         }
     }
 
@@ -239,5 +305,96 @@ pub fn duration_short(secs: u64) -> String {
         format!("{}m{}s", secs / MINUTE, secs % MINUTE)
     } else {
         format!("{}s", secs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(peak: u64, used: u64) -> Session {
+        Session {
+            pid: 1,
+            session_id: "s".into(),
+            cwd: PathBuf::from("/repo"),
+            name: "one".into(),
+            status: Status::Busy,
+            version: String::new(),
+            kind: String::new(),
+            entrypoint: String::new(),
+            started_at_ms: 0,
+            status_updated_at_ms: 0,
+            proc: None,
+            configured_model: None,
+            detail: Detail {
+                model: Some("claude-opus-5".into()),
+                usage: Some(ContextUsage {
+                    input: used,
+                    ..Default::default()
+                }),
+                usage_peak: peak,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn usage_past_the_standard_window_settles_the_limit() {
+        let (limit, source) = session(386_849, 386_849).context_limit(None);
+        assert_eq!(limit, CONTEXT_LIMIT_LONG);
+        assert_eq!(source, LimitSource::Observed);
+        assert!(!source.is_guess());
+    }
+
+    #[test]
+    fn nothing_known_falls_back_to_the_standard_window() {
+        let (limit, source) = session(169_456, 169_456).context_limit(None);
+        assert_eq!(limit, CONTEXT_LIMIT_STANDARD);
+        assert_eq!(source, LimitSource::Assumed);
+        assert!(source.is_guess());
+    }
+
+    /// The regression: 169k of a 1M window read as 85% instead of 17%.
+    #[test]
+    fn a_recorded_long_model_widens_a_session_under_200k() {
+        let mut session = session(169_456, 169_456);
+        session.detail.long_context_models = vec!["claude-opus-5".into()];
+
+        let (limit, source) = session.context_limit(None);
+        assert_eq!(limit, CONTEXT_LIMIT_LONG);
+        assert_eq!(source, LimitSource::Recorded);
+        assert!((session.context_ratio(None) - 0.169456).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_recorded_model_the_session_left_is_ignored() {
+        let mut session = session(169_456, 169_456);
+        session.detail.long_context_models = vec!["claude-fable-5".into()];
+        assert_eq!(session.context_limit(None).1, LimitSource::Assumed);
+    }
+
+    #[test]
+    fn settings_widen_only_the_family_they_name() {
+        let mut session = session(100, 100);
+        session.configured_model = Some("opus[1m]".into());
+        assert_eq!(session.context_limit(None).1, LimitSource::Configured);
+
+        session.detail.model = Some("claude-sonnet-5".into());
+        assert_eq!(session.context_limit(None).1, LimitSource::Assumed);
+
+        session.detail.model = Some("claude-opus-5".into());
+        session.configured_model = Some("opus".into());
+        assert_eq!(session.context_limit(None).1, LimitSource::Assumed);
+    }
+
+    #[test]
+    fn an_explicit_limit_outranks_every_signal() {
+        let mut session = session(386_849, 386_849);
+        session.configured_model = Some("opus[1m]".into());
+
+        let (limit, source) = session.context_limit(Some(500_000));
+        assert_eq!(limit, 500_000);
+        assert_eq!(source, LimitSource::Override);
+        assert!(!source.is_guess());
     }
 }
