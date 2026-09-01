@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::model::Session;
-use crate::{discovery, subagents, transcript};
+use crate::{discovery, settings, subagents, transcript};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -133,6 +133,10 @@ impl App {
                 session.detail = transcript::read(&path);
                 session.detail.subagents = subagents::read(&path);
             }
+            // Re-read every tick, not cached: settings can change under a
+            // running session, and three small files cost nothing next to the
+            // transcript tail above.
+            session.configured_model = settings::model_for(&self.claude_home, &session.cwd);
         }
 
         self.sessions = sessions;

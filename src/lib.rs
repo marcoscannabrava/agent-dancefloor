@@ -4,6 +4,7 @@
 pub mod app;
 pub mod discovery;
 pub mod model;
+pub mod settings;
 pub mod subagents;
 pub mod transcript;
 pub mod ui;

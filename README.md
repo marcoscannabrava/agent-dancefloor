@@ -21,7 +21,7 @@ session works, what it runs, how full its context window is, and which subagents
 │                                         ││                                                                   │
 │                                         ││uptime      1d1h                                                   │
 │                                         ││last write  2m18s ago                                              │
-│                                         ││ context  445k / 1.0M~                                             │
+│                                         ││ context  445k / 1.0M                                              │
 │                                         ││██████████████████████████████  44%                                │
 └─────────────────────────────────────────┘└───────────────────────────────────────────────────────────────────┘
  j/k move tab pane 1-4 jump s sort r refresh ? help q quit
@@ -93,10 +93,12 @@ directory does not.
 
 ## Known limits
 
-**The context limit is inferred.** Claude Code records the base model id in the transcript. It
-records `claude-opus-5` even when the session runs the `[1m]` long-context variant, so the real
-window size is not on disk. `dancefloor` assumes 200k, and 1M once it sees usage above 200k. A
-`~` after the limit means the number was inferred. Use `--context-limit` to pin it.
+**The context limit is worked out, not read.** Assistant messages record the base model id.
+They record `claude-opus-5` even when the session runs the `[1m]` long-context variant, so the
+window is never stated where the usage is. `dancefloor` takes the strongest signal it has: usage
+already past 200k, a `cost-state` line that billed this model at `[1m]`, or the model that
+settings name for the session's directory. A `~` after the limit means none of the three applied
+and 200k is a fallback. Use `--context-limit` to pin it.
 
 **Rate limits are not shown.** Claude Code sends the 5-hour and 7-day figures to the status line
 hook on stdin. It does not write them to disk, so no external tool can read them.
