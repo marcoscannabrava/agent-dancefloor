@@ -149,7 +149,8 @@ impl App {
         let limit = self.context_limit;
         let now = Self::now_ms();
         match self.sort {
-            // Busy first, then the name, so the ordering is stable between refreshes.
+            // Waiting first, then busy, then the name: the sessions that need a
+            // human stay on top, and the ordering is stable between refreshes.
             Sort::Status => self
                 .sessions
                 .sort_by(|a, b| match (a.status as u8).cmp(&(b.status as u8)) {

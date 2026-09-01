@@ -26,6 +26,18 @@ pub fn context_color(ratio: f64) -> Color {
     }
 }
 
+/// Status colour, shared by the list glyph and the detail heading. Waiting is
+/// yellow so the one state that needs a human stands apart from the two that
+/// do not.
+pub fn status_color(status: crate::model::Status) -> Color {
+    match status {
+        crate::model::Status::Waiting => Color::Yellow,
+        crate::model::Status::Busy => Color::Green,
+        crate::model::Status::Idle => Color::Blue,
+        crate::model::Status::Other => Color::DarkGray,
+    }
+}
+
 pub fn label_value<'a>(label: &'a str, value: impl Into<String>) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{label:<12}"), Style::new().fg(LABEL)),
@@ -61,6 +73,11 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .filter(|s| s.status == crate::model::Status::Busy)
         .count();
+    let waiting = app
+        .sessions
+        .iter()
+        .filter(|s| s.status == crate::model::Status::Waiting)
+        .count();
 
     let mut spans = vec![
         Span::styled(" dancefloor ", Style::new().fg(Color::Black).bg(ACCENT).bold()),
@@ -71,6 +88,17 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(" · ", Style::new().fg(LABEL)),
         Span::styled(format!("{busy} busy"), Style::new().fg(Color::Green)),
+        Span::styled(" · ", Style::new().fg(LABEL)),
+        // Reversed rather than merely coloured: across a header of grey text,
+        // a filled block is what the eye lands on first.
+        Span::styled(
+            format!(" {} {waiting} waiting ", crate::model::Status::Waiting.glyph()),
+            if waiting > 0 {
+                Style::new().fg(Color::Black).bg(Color::Yellow).bold()
+            } else {
+                Style::new().fg(LABEL)
+            },
+        ),
         Span::styled(" · ", Style::new().fg(LABEL)),
         Span::styled(format!("sort {}", app.sort.label()), Style::new().fg(LABEL)),
         Span::styled(" · ", Style::new().fg(LABEL)),
@@ -129,6 +157,28 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         label_value("r", "refresh now"),
         label_value("? ", "close this help"),
         label_value("q / esc", "quit"),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(
+                format!("{:<12}", crate::model::Status::Waiting.glyph()),
+                Style::new().fg(Color::Yellow).bold(),
+            ),
+            Span::raw("waiting for your input"),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("{:<12}", crate::model::Status::Busy.glyph()),
+                Style::new().fg(Color::Green),
+            ),
+            Span::raw("working"),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("{:<12}", crate::model::Status::Idle.glyph()),
+                Style::new().fg(Color::Blue),
+            ),
+            Span::raw("idle"),
+        ]),
         Line::raw(""),
         Line::from(Span::styled(
             "Context is read from the transcript's newest usage block.",

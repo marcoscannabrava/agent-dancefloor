@@ -8,14 +8,16 @@ use ratatui::Frame;
 
 use crate::app::App;
 use crate::model::{Session, Status};
-use crate::ui::{context_color, ACCENT, LABEL};
+use crate::ui::{context_color, status_color, ACCENT, LABEL};
 
 const BAR_CELLS: u16 = 6;
 const PERCENT_CELLS: u16 = 4;
 const DIR_CELLS_MAX: u16 = 14;
+/// The status column, wide enough for the two-cell waiting marker.
+const STATUS_CELLS: u16 = 2;
 /// Status glyph, the four single-column gaps a five-column table inserts, the
 /// bar, and the percentage. Whatever is left is split between name and dir.
-const FIXED_CELLS: u16 = 1 + 4 + BAR_CELLS + PERCENT_CELLS;
+const FIXED_CELLS: u16 = STATUS_CELLS + 4 + BAR_CELLS + PERCENT_CELLS;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::bordered()
@@ -59,7 +61,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(1),
+            Constraint::Length(STATUS_CELLS),
             Constraint::Length(name_width),
             Constraint::Length(dir_width),
             Constraint::Length(BAR_CELLS),
@@ -86,7 +88,7 @@ fn build_row<'a>(
     Row::new(vec![
         Cell::from(Span::styled(
             session.status.glyph(),
-            Style::new().fg(status_color(session.status)),
+            glyph_style(session.status),
         )),
         Cell::from(Span::styled(
             elide(&session.name, name_width as usize),
@@ -106,16 +108,19 @@ fn build_row<'a>(
 
 fn name_style(status: Status) -> Style {
     match status {
+        // A waiting session is the one the user has to act on, so it is the only
+        // row that carries the status colour into the name as well.
+        Status::Waiting => Style::new().fg(Color::Yellow).bold(),
         Status::Busy => Style::new().bold(),
         _ => Style::new(),
     }
 }
 
-fn status_color(status: Status) -> Color {
+fn glyph_style(status: Status) -> Style {
+    let style = Style::new().fg(status_color(status));
     match status {
-        Status::Busy => Color::Green,
-        Status::Idle => Color::Blue,
-        Status::Other => Color::DarkGray,
+        Status::Waiting => style.bold(),
+        _ => style,
     }
 }
 
