@@ -268,8 +268,8 @@ pub struct Detail {
     /// survives the dip that compaction puts in the latest message.
     pub usage_peak: u64,
     pub totals: TailTotals,
-    /// The newest `cost-state` line. A session that has run no turn yet has
-    /// written none.
+    /// The newest `cost-state` line. Claude Code writes one as a session ends,
+    /// so a live session carries none until it has been resumed at least once.
     pub cost: Option<CostState>,
     pub title: Option<String>,
     pub git_branch: Option<String>,

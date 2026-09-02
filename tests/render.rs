@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use dancefloor::app::{App, Focus, Tab};
+use dancefloor::app::{App, Focus, Sort, Tab};
 use dancefloor::model::{
     Activity, ContextUsage, CostState, Detail, Driver, ModelCost, ProcStat, PullRequest, Session,
     Status, Subagent, TailTotals, ToolCall, Turn, Worktree,
@@ -545,6 +545,36 @@ fn the_header_totals_spend_only_when_something_reported_it() {
     assert!(!screen.contains("$0.00"), "a total was invented:\n{screen}");
 }
 
+/// A session that recorded no cost sinks below every session that did, and the
+/// ones that tie hold their order by name across a refresh.
+#[test]
+fn the_cost_sort_ranks_by_spend() {
+    let priced = |name: &str, usd: Option<f64>| {
+        let mut session = populated_session();
+        session.name = name.into();
+        session.detail.cost = usd.map(|cost_usd| CostState {
+            cost_usd,
+            ..Default::default()
+        });
+        session
+    };
+
+    let mut app = app_with(vec![
+        priced("zeta", None),
+        priced("alpha", Some(0.10)),
+        priced("beta", None),
+        priced("gamma", Some(9.50)),
+    ]);
+
+    // Reached from context, which is where the cycle puts it.
+    app.sort = Sort::Context;
+    app.cycle_sort();
+    assert_eq!(app.sort, Sort::Cost);
+
+    let order: Vec<&str> = app.sessions.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(order, vec!["gamma", "alpha", "beta", "zeta"]);
+}
+
 #[test]
 fn empty_state_explains_itself_rather_than_showing_a_blank_pane() {
     let app = app_with(Vec::new());
@@ -554,4 +584,3 @@ fn empty_state_explains_itself_rather_than_showing_a_blank_pane() {
         "empty hint missing:\n{screen}"
     );
 }
-

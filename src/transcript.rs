@@ -400,8 +400,8 @@ fn parse_cost_state(entry: &Value, detail: &mut Detail) {
     let count = |key: &str| entry.get(key).and_then(Value::as_u64).unwrap_or(0);
 
     let mut models = read_model_costs(entry);
-    // Highest cost first, and by id where two match, so the
-    // pane holds still between refreshes.
+    // Highest cost first, by id where two match, so the pane
+    // holds still between refreshes.
     models.sort_by(|a, b| b.cost_usd.total_cmp(&a.cost_usd).then(a.id.cmp(&b.id)));
 
     detail.cost = Some(CostState {
