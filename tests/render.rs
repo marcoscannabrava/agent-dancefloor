@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use dancefloor::app::{App, Focus, Tab};
 use dancefloor::model::{
-    Activity, ContextUsage, Detail, Driver, ProcStat, PullRequest, Session, Status, Subagent,
-    TailTotals, ToolCall, Turn, Worktree,
+    Activity, ContextUsage, CostState, Detail, Driver, ModelCost, ProcStat, PullRequest, Session,
+    Status, Subagent, TailTotals, ToolCall, Turn, Worktree,
 };
 use dancefloor::ui;
 use ratatui::backend::TestBackend;
@@ -49,7 +49,27 @@ fn populated_session() -> Session {
                 output: 811,
             }),
             usage_peak: 120_000,
-            long_context_models: Vec::new(),
+            // No `[1m]` id here: the window tests start from a session nothing
+            // has widened yet.
+            cost: Some(CostState {
+                cost_usd: 1.221_733,
+                lines_added: 214,
+                lines_removed: 37,
+                api_ms: 132_206,
+                api_ms_without_retries: 132_181,
+                tool_ms: 2_219,
+                total_ms: 366_380,
+                models: vec![
+                    ModelCost {
+                        id: "claude-opus-5".into(),
+                        cost_usd: 1.220_764,
+                    },
+                    ModelCost {
+                        id: "claude-haiku-4-5-20251001".into(),
+                        cost_usd: 0.000_969,
+                    },
+                ],
+            }),
             totals: TailTotals {
                 assistant_messages: 86,
                 user_messages: 50,
@@ -376,7 +396,13 @@ fn a_long_window_is_believed_before_usage_proves_it() {
     assert!(screen.contains("85%"), "guess percentage missing:\n{screen}");
 
     // A cost-state line billed this model at [1m], so the guess is over.
-    session.detail.long_context_models = vec!["claude-opus-5".into()];
+    session.detail.cost = Some(CostState {
+        models: vec![ModelCost {
+            id: "claude-opus-5[1m]".into(),
+            cost_usd: 1.220_764,
+        }],
+        ..Default::default()
+    });
     let app = app_with(vec![session.clone()]);
     let screen = render(&app, 140, 40);
     assert!(screen.contains("169k / 1.0M"), "recorded missing:\n{screen}");
@@ -384,7 +410,13 @@ fn a_long_window_is_believed_before_usage_proves_it() {
     assert!(screen.contains("17%"), "recorded percentage:\n{screen}");
 
     // Settings alone carry the same weight once the family matches.
-    session.detail.long_context_models.clear();
+    session.detail.cost = Some(CostState {
+        models: vec![ModelCost {
+            id: "claude-opus-5".into(),
+            cost_usd: 1.220_764,
+        }],
+        ..Default::default()
+    });
     session.configured_model = Some("opus[1m]".into());
     let app = app_with(vec![session.clone()]);
     let screen = render(&app, 140, 40);

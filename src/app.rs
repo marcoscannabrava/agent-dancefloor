@@ -203,7 +203,7 @@ impl App {
             }),
             Sort::Uptime => self
                 .sessions
-                .sort_by(|a, b| b.uptime_secs(now).cmp(&a.uptime_secs(now))),
+                .sort_by_key(|s| std::cmp::Reverse(s.uptime_secs(now))),
             Sort::Directory => self.sessions.sort_by(|a, b| {
                 a.dir_label()
                     .to_lowercase()

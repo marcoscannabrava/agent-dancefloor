@@ -121,6 +121,38 @@ pub struct TailTotals {
     pub web_searches: u64,
 }
 
+/// Whole-session accounting, as Claude Code records it. Unlike `TailTotals`
+/// these cover every turn, not the parsed tail.
+#[derive(Debug, Clone, Default)]
+pub struct CostState {
+    pub cost_usd: f64,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+    pub api_ms: u64,
+    pub api_ms_without_retries: u64,
+    pub tool_ms: u64,
+    pub total_ms: u64,
+    /// Billed ids keep the `[1m]` suffix, so this is the one record of the
+    /// model variant the session runs. Highest cost first.
+    pub models: Vec<ModelCost>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelCost {
+    pub id: String,
+    pub cost_usd: f64,
+}
+
+impl CostState {
+    /// Was `model` billed against the long window? Only `cost-state` names the
+    /// `[1m]` variant; assistant messages carry the base id.
+    pub fn billed_long(&self, model: &str) -> bool {
+        self.models
+            .iter()
+            .any(|billed| billed.id.strip_suffix(LONG_CONTEXT_SUFFIX) == Some(model))
+    }
+}
+
 /// What is steering the newest turn, when anything is. A skill frames a whole
 /// turn and an MCP tool is one call inside it, so the two never both apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,9 +268,9 @@ pub struct Detail {
     /// survives the dip that compaction puts in the latest message.
     pub usage_peak: u64,
     pub totals: TailTotals,
-    /// Model ids a `cost-state` line billed against the long window, with the
-    /// `[1m]` suffix stripped so they compare against `model`.
-    pub long_context_models: Vec<String>,
+    /// The newest `cost-state` line. A session that has run no turn yet has
+    /// written none.
+    pub cost: Option<CostState>,
     pub title: Option<String>,
     pub git_branch: Option<String>,
     pub permission_mode: Option<String>,
@@ -361,9 +393,9 @@ impl Session {
             return false;
         };
         self.detail
-            .long_context_models
-            .iter()
-            .any(|billed| billed == model)
+            .cost
+            .as_ref()
+            .is_some_and(|cost| cost.billed_long(model))
     }
 
     fn configured_long(&self) -> bool {
@@ -394,6 +426,16 @@ pub fn tokens_short(n: u64) -> String {
     }
 }
 
+/// Compact money: `$1.22`, and four places under a cent so a session that cost
+/// something does not read as free.
+pub fn cost_short(usd: f64) -> String {
+    if usd >= 0.01 || usd == 0.0 {
+        format!("${usd:.2}")
+    } else {
+        format!("${usd:.4}")
+    }
+}
+
 /// Compact duration: `4d2h`, `3h12m`, `18m54s`, `41s`.
 pub fn duration_short(secs: u64) -> String {
     const MINUTE: u64 = 60;
@@ -408,6 +450,15 @@ pub fn duration_short(secs: u64) -> String {
     } else {
         format!("{}s", secs)
     }
+}
+
+/// Milliseconds, kept whole under a second. Tool time is often a few hundred
+/// milliseconds and must not read as nothing.
+pub fn duration_ms_short(ms: u64) -> String {
+    if ms < 1_000 {
+        return format!("{ms}ms");
+    }
+    duration_short(ms / 1_000)
 }
 
 #[cfg(test)]
@@ -456,11 +507,22 @@ mod tests {
         assert!(source.is_guess());
     }
 
+    fn billed(id: &str) -> CostState {
+        CostState {
+            cost_usd: 1.220_764,
+            models: vec![ModelCost {
+                id: id.into(),
+                cost_usd: 1.220_764,
+            }],
+            ..Default::default()
+        }
+    }
+
     /// The regression: 169k of a 1M window read as 85% instead of 17%.
     #[test]
     fn a_recorded_long_model_widens_a_session_under_200k() {
         let mut session = session(169_456, 169_456);
-        session.detail.long_context_models = vec!["claude-opus-5".into()];
+        session.detail.cost = Some(billed("claude-opus-5[1m]"));
 
         let (limit, source) = session.context_limit(None);
         assert_eq!(limit, CONTEXT_LIMIT_LONG);
@@ -471,7 +533,7 @@ mod tests {
     #[test]
     fn a_recorded_model_the_session_left_is_ignored() {
         let mut session = session(169_456, 169_456);
-        session.detail.long_context_models = vec!["claude-fable-5".into()];
+        session.detail.cost = Some(billed("claude-fable-5[1m]"));
         assert_eq!(session.context_limit(None).1, LimitSource::Assumed);
     }
 
@@ -487,6 +549,23 @@ mod tests {
         session.detail.model = Some("claude-opus-5".into());
         session.configured_model = Some("opus".into());
         assert_eq!(session.context_limit(None).1, LimitSource::Assumed);
+    }
+
+    #[test]
+    fn a_cost_under_a_cent_still_shows_a_figure() {
+        assert_eq!(cost_short(0.0), "$0.00");
+        assert_eq!(cost_short(0.000_969), "$0.0010");
+        assert_eq!(cost_short(0.009_9), "$0.0099");
+        assert_eq!(cost_short(0.01), "$0.01");
+        assert_eq!(cost_short(1.221_733_000_000_000_2), "$1.22");
+    }
+
+    #[test]
+    fn a_duration_under_a_second_keeps_its_milliseconds() {
+        assert_eq!(duration_ms_short(358), "358ms");
+        assert_eq!(duration_ms_short(999), "999ms");
+        assert_eq!(duration_ms_short(1_000), "1s");
+        assert_eq!(duration_ms_short(132_206), "2m12s");
     }
 
     #[test]
