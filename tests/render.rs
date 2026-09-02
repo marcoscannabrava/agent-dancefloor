@@ -478,6 +478,74 @@ fn an_activity_free_session_says_so() {
 }
 
 #[test]
+fn the_usage_pane_shows_the_whole_session_bill() {
+    let mut app = app_with(vec![populated_session()]);
+    app.tab = Tab::Usage;
+
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("session totals"), "block missing:\n{screen}");
+    assert!(screen.contains("cost        $1.22"), "cost missing:\n{screen}");
+    assert!(
+        screen.contains("+214 / -37"),
+        "lines changed missing:\n{screen}"
+    );
+    // The split is the point: 2m12s of it was the API, 2s the tools.
+    assert!(
+        screen.contains("api time    2m12s"),
+        "api time missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("tool time   2s"),
+        "tool time missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("wall time   6m6s"),
+        "wall time missing:\n{screen}"
+    );
+    // The retry row is 132_206 less 132_181, and only appears when it is not 0.
+    assert!(
+        screen.contains("retries     25ms"),
+        "retry row missing:\n{screen}"
+    );
+    // A model id is longer than the shared pad, so the cost needs its own column.
+    assert!(
+        screen.contains("claude-haiku-4-5-20251001 $0.0010"),
+        "model row ran into its cost:\n{screen}"
+    );
+}
+
+#[test]
+fn a_session_with_no_cost_state_says_so() {
+    let mut session = populated_session();
+    session.detail.cost = None;
+    let mut app = app_with(vec![session]);
+    app.tab = Tab::Usage;
+
+    let screen = render(&app, 140, 40);
+    assert!(
+        screen.contains("no cost recorded yet"),
+        "empty hint missing:\n{screen}"
+    );
+    assert!(screen.contains("newest request"), "pane cut short:\n{screen}");
+}
+
+/// A fleet with no cost data must show no total at all. A $0.00 there would
+/// read as a free fleet rather than an unmeasured one.
+#[test]
+fn the_header_totals_spend_only_when_something_reported_it() {
+    let app = app_with(vec![populated_session(), populated_session()]);
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("spend $2.44"), "fleet spend missing:\n{screen}");
+
+    let mut free = populated_session();
+    free.detail.cost = None;
+    let app = app_with(vec![free.clone(), free]);
+    let screen = render(&app, 140, 40);
+    assert!(!screen.contains("spend"), "spend shown with no data:\n{screen}");
+    assert!(!screen.contains("$0.00"), "a total was invented:\n{screen}");
+}
+
+#[test]
 fn empty_state_explains_itself_rather_than_showing_a_blank_pane() {
     let app = app_with(Vec::new());
     let screen = render(&app, 80, 24);
@@ -486,3 +554,4 @@ fn empty_state_explains_itself_rather_than_showing_a_blank_pane() {
         "empty hint missing:\n{screen}"
     );
 }
+

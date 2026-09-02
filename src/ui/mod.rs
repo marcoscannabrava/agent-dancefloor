@@ -123,6 +123,14 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ),
     ];
 
+    if let Some(spend) = fleet_spend(app) {
+        spans.push(Span::styled(" · ", Style::new().fg(LABEL)));
+        spans.push(Span::styled(
+            format!("spend {}", crate::model::cost_short(spend)),
+            Style::new().fg(LABEL),
+        ));
+    }
+
     // A failed scan must be visible without opening a pane; it means the whole
     // list is stale, not just one row.
     if let Some(error) = &app.scan_error {
@@ -133,6 +141,16 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// What the whole fleet has billed. None when nothing reported a cost, because
+/// a $0.00 total would claim the fleet was free rather than unmeasured.
+fn fleet_spend(app: &App) -> Option<f64> {
+    app.sessions
+        .iter()
+        .filter_map(|session| session.detail.cost.as_ref())
+        .map(|cost| cost.cost_usd)
+        .reduce(|total, cost| total + cost)
 }
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {

@@ -56,6 +56,7 @@ pub enum Focus {
 pub enum Sort {
     Status,
     Context,
+    Cost,
     Uptime,
     Directory,
 }
@@ -65,6 +66,7 @@ impl Sort {
         match self {
             Sort::Status => "status",
             Sort::Context => "context",
+            Sort::Cost => "cost",
             Sort::Uptime => "uptime",
             Sort::Directory => "dir",
         }
@@ -73,11 +75,23 @@ impl Sort {
     pub fn next(self) -> Self {
         match self {
             Sort::Status => Sort::Context,
-            Sort::Context => Sort::Uptime,
+            Sort::Context => Sort::Cost,
+            Sort::Cost => Sort::Uptime,
             Sort::Uptime => Sort::Directory,
             Sort::Directory => Sort::Status,
         }
     }
+}
+
+/// What a session has billed. Nothing recorded reads as free, which is what
+/// puts those sessions at the bottom of a cost sort.
+fn spend(session: &Session) -> f64 {
+    session
+        .detail
+        .cost
+        .as_ref()
+        .map(|cost| cost.cost_usd)
+        .unwrap_or(0.0)
 }
 
 pub struct App {
@@ -200,6 +214,14 @@ impl App {
                 b.context_ratio(limit)
                     .partial_cmp(&a.context_ratio(limit))
                     .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            // A session that has written no cost-state line has spent nothing
+            // we know of, so it sorts below every session that has.
+            Sort::Cost => self.sessions.sort_by(|a, b| {
+                spend(b)
+                    .partial_cmp(&spend(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
             }),
             Sort::Uptime => self
                 .sessions
