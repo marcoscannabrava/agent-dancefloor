@@ -62,7 +62,7 @@ dancefloor --context-limit 1000000  # pin the context window
 `enter` moves the keys from the session list into the pane; the coloured border says which
 half has them. `esc` gives them back.
 
-The sort order cycles through status, context, uptime, and directory. Status sorts busy
+The sort order cycles through status, context, cost, uptime, and directory. Status sorts busy
 sessions first.
 
 ## The panes
@@ -76,8 +76,13 @@ or skill it runs, and how long its transcript has been idle.
 
 **Prompt** shows the last prompt the user submitted, with the session title above it.
 
-**Usage** breaks the newest request into input, cache read, cache write, and output tokens. It
-also totals recent activity over the part of the transcript that was read.
+**Usage** leads with the whole-session bill: what it cost, the lines it added and removed, and
+the split between API and tool time. Below that it breaks the newest request into input, cache
+read, cache write, and output tokens, then totals recent activity over the part of the
+transcript that was read.
+
+The bill comes from a `cost-state` line, which Claude Code writes once per run as the session
+exits. A session that has never been resumed has none yet, so its totals read as unrecorded.
 
 **Activity** answers what the session is doing now. It leads with the recap Claude writes when
 you walk away, names the skill or MCP tool that drives the turn, and gives the length of the
@@ -97,7 +102,7 @@ never writes to your Claude Code state.
 | Source | What it gives |
 | ------ | ------------- |
 | `~/.claude/sessions/<pid>.json` | The live session registry: pid, session id, directory, name, and busy or idle status |
-| `~/.claude/projects/<dir>/<session>.jsonl` | Token usage, model, title, branch, permission mode, worktree, pull request, last prompt, and the activity stream |
+| `~/.claude/projects/<dir>/<session>.jsonl` | Token usage, model, title, branch, permission mode, worktree, pull request, last prompt, the activity stream, and the whole-session cost |
 | `~/.claude/projects/<dir>/<session>/subagents/` | One `meta.json` per spawned subagent |
 | `ps` | CPU and resident memory per session process |
 | `wl-copy`, `xclip`, `xsel`, or `pbcopy` | Whichever is installed, to copy a tool call |
