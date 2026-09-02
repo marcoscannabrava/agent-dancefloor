@@ -7,7 +7,9 @@ use ratatui::widgets::{Block, Gauge, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Focus, Tab};
-use crate::model::{duration_short, tokens_short, Session, Status};
+use crate::model::{
+    cost_short, duration_ms_short, duration_short, tokens_short, CostState, Session, Status,
+};
 use crate::ui::{context_color, label_value, status_color, ACCENT, LABEL};
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
@@ -326,15 +328,66 @@ fn draw_prompt(frame: &mut Frame, session: &Session, area: Rect) {
     );
 }
 
+/// The whole-session bill, as Claude Code recorded it. It leads the pane
+/// because it covers every turn, unlike everything under it.
+fn cost_lines(cost: Option<&CostState>) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        "session totals",
+        Style::new().fg(ACCENT).bold(),
+    ))];
+
+    let Some(cost) = cost else {
+        lines.push(Line::from(Span::styled(
+            "no cost recorded yet",
+            Style::new().fg(LABEL),
+        )));
+        return lines;
+    };
+
+    lines.push(label_value("cost", cost_short(cost.cost_usd)));
+    lines.push(label_value(
+        "lines",
+        format!("+{} / -{}", cost.lines_added, cost.lines_removed),
+    ));
+    lines.push(label_value("api time", duration_ms_short(cost.api_ms)));
+    // Retry overhead. Zero is the normal case, so the row only earns a place
+    // when the session actually lost time to one.
+    let retries = cost.api_ms.saturating_sub(cost.api_ms_without_retries);
+    if retries > 0 {
+        lines.push(label_value("retries", duration_ms_short(retries)));
+    }
+    lines.push(label_value("tool time", duration_ms_short(cost.tool_ms)));
+    lines.push(label_value("wall time", duration_ms_short(cost.total_ms)));
+
+    // Model ids run past the shared 12-column pad, which does not truncate, so
+    // these rows carry a width of their own or the cost butts against the id.
+    let pad = cost
+        .models
+        .iter()
+        .map(|model| model.id.chars().count() + 1)
+        .max()
+        .unwrap_or(0)
+        .max(12);
+    for model in &cost.models {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<pad$}", model.id), Style::new().fg(LABEL)),
+            Span::raw(cost_short(model.cost_usd)),
+        ]));
+    }
+    lines
+}
+
 fn draw_usage(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
     let [breakdown, gauge] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(area);
 
     let detail = &session.detail;
-    let mut lines = vec![Line::from(Span::styled(
+    let mut lines = cost_lines(detail.cost.as_ref());
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
         "newest request",
         Style::new().fg(ACCENT).bold(),
-    ))];
+    )));
 
     match &detail.usage {
         Some(usage) => {
@@ -357,9 +410,10 @@ fn draw_usage(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
         "recent activity",
         Style::new().fg(ACCENT).bold(),
     )));
-    // These sum the parsed tail, not the session, so the pane must say so.
+    // Whole-session totals sit right above, so this block has to say which of
+    // the two it is.
     lines.push(Line::from(Span::styled(
-        "(over the transcript tail, not the whole session)",
+        "(transcript tail only)",
         Style::new().fg(LABEL),
     )));
     lines.push(label_value(

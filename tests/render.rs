@@ -7,10 +7,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use dancefloor::app::{App, Focus, Tab};
+use dancefloor::app::{App, Focus, Sort, Tab};
 use dancefloor::model::{
-    Activity, ContextUsage, Detail, Driver, ProcStat, PullRequest, Session, Status, Subagent,
-    TailTotals, ToolCall, Turn, Worktree,
+    Activity, ContextUsage, CostState, Detail, Driver, ModelCost, ProcStat, PullRequest, Session,
+    Status, Subagent, TailTotals, ToolCall, Turn, Worktree,
 };
 use dancefloor::ui;
 use ratatui::backend::TestBackend;
@@ -49,7 +49,27 @@ fn populated_session() -> Session {
                 output: 811,
             }),
             usage_peak: 120_000,
-            long_context_models: Vec::new(),
+            // No `[1m]` id here: the window tests start from a session nothing
+            // has widened yet.
+            cost: Some(CostState {
+                cost_usd: 1.221_733,
+                lines_added: 214,
+                lines_removed: 37,
+                api_ms: 132_206,
+                api_ms_without_retries: 132_181,
+                tool_ms: 2_219,
+                total_ms: 366_380,
+                models: vec![
+                    ModelCost {
+                        id: "claude-opus-5".into(),
+                        cost_usd: 1.220_764,
+                    },
+                    ModelCost {
+                        id: "claude-haiku-4-5-20251001".into(),
+                        cost_usd: 0.000_969,
+                    },
+                ],
+            }),
             totals: TailTotals {
                 assistant_messages: 86,
                 user_messages: 50,
@@ -376,7 +396,13 @@ fn a_long_window_is_believed_before_usage_proves_it() {
     assert!(screen.contains("85%"), "guess percentage missing:\n{screen}");
 
     // A cost-state line billed this model at [1m], so the guess is over.
-    session.detail.long_context_models = vec!["claude-opus-5".into()];
+    session.detail.cost = Some(CostState {
+        models: vec![ModelCost {
+            id: "claude-opus-5[1m]".into(),
+            cost_usd: 1.220_764,
+        }],
+        ..Default::default()
+    });
     let app = app_with(vec![session.clone()]);
     let screen = render(&app, 140, 40);
     assert!(screen.contains("169k / 1.0M"), "recorded missing:\n{screen}");
@@ -384,7 +410,13 @@ fn a_long_window_is_believed_before_usage_proves_it() {
     assert!(screen.contains("17%"), "recorded percentage:\n{screen}");
 
     // Settings alone carry the same weight once the family matches.
-    session.detail.long_context_models.clear();
+    session.detail.cost = Some(CostState {
+        models: vec![ModelCost {
+            id: "claude-opus-5".into(),
+            cost_usd: 1.220_764,
+        }],
+        ..Default::default()
+    });
     session.configured_model = Some("opus[1m]".into());
     let app = app_with(vec![session.clone()]);
     let screen = render(&app, 140, 40);
@@ -443,6 +475,104 @@ fn an_activity_free_session_says_so() {
 
     let screen = render(&app, 140, 40);
     assert!(screen.contains("Nothing recorded"), "hint missing:\n{screen}");
+}
+
+#[test]
+fn the_usage_pane_shows_the_whole_session_bill() {
+    let mut app = app_with(vec![populated_session()]);
+    app.tab = Tab::Usage;
+
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("session totals"), "block missing:\n{screen}");
+    assert!(screen.contains("cost        $1.22"), "cost missing:\n{screen}");
+    assert!(
+        screen.contains("+214 / -37"),
+        "lines changed missing:\n{screen}"
+    );
+    // The split is the point: 2m12s of it was the API, 2s the tools.
+    assert!(
+        screen.contains("api time    2m12s"),
+        "api time missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("tool time   2s"),
+        "tool time missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("wall time   6m6s"),
+        "wall time missing:\n{screen}"
+    );
+    // The retry row is 132_206 less 132_181, and only appears when it is not 0.
+    assert!(
+        screen.contains("retries     25ms"),
+        "retry row missing:\n{screen}"
+    );
+    // A model id is longer than the shared pad, so the cost needs its own column.
+    assert!(
+        screen.contains("claude-haiku-4-5-20251001 $0.0010"),
+        "model row ran into its cost:\n{screen}"
+    );
+}
+
+#[test]
+fn a_session_with_no_cost_state_says_so() {
+    let mut session = populated_session();
+    session.detail.cost = None;
+    let mut app = app_with(vec![session]);
+    app.tab = Tab::Usage;
+
+    let screen = render(&app, 140, 40);
+    assert!(
+        screen.contains("no cost recorded yet"),
+        "empty hint missing:\n{screen}"
+    );
+    assert!(screen.contains("newest request"), "pane cut short:\n{screen}");
+}
+
+/// A fleet with no cost data must show no total at all. A $0.00 there would
+/// read as a free fleet rather than an unmeasured one.
+#[test]
+fn the_header_totals_spend_only_when_something_reported_it() {
+    let app = app_with(vec![populated_session(), populated_session()]);
+    let screen = render(&app, 140, 40);
+    assert!(screen.contains("spend $2.44"), "fleet spend missing:\n{screen}");
+
+    let mut free = populated_session();
+    free.detail.cost = None;
+    let app = app_with(vec![free.clone(), free]);
+    let screen = render(&app, 140, 40);
+    assert!(!screen.contains("spend"), "spend shown with no data:\n{screen}");
+    assert!(!screen.contains("$0.00"), "a total was invented:\n{screen}");
+}
+
+/// A session that recorded no cost sinks below every session that did, and the
+/// ones that tie hold their order by name across a refresh.
+#[test]
+fn the_cost_sort_ranks_by_spend() {
+    let priced = |name: &str, usd: Option<f64>| {
+        let mut session = populated_session();
+        session.name = name.into();
+        session.detail.cost = usd.map(|cost_usd| CostState {
+            cost_usd,
+            ..Default::default()
+        });
+        session
+    };
+
+    let mut app = app_with(vec![
+        priced("zeta", None),
+        priced("alpha", Some(0.10)),
+        priced("beta", None),
+        priced("gamma", Some(9.50)),
+    ]);
+
+    // Reached from context, which is where the cycle puts it.
+    app.sort = Sort::Context;
+    app.cycle_sort();
+    assert_eq!(app.sort, Sort::Cost);
+
+    let order: Vec<&str> = app.sessions.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(order, vec!["gamma", "alpha", "beta", "zeta"]);
 }
 
 #[test]

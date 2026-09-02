@@ -13,7 +13,7 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::model::{
-    ContextUsage, Detail, Driver, PullRequest, ToolCall, Turn, Worktree, LONG_CONTEXT_SUFFIX,
+    ContextUsage, CostState, Detail, Driver, ModelCost, PullRequest, ToolCall, Turn, Worktree,
     MODEL_SYNTHETIC, PROMPT_CHARS_MAX, PROMPT_SEARCH_BYTES_MAX, PROMPT_SEARCH_CHUNK_BYTES,
     TOOL_DETAIL_CHARS_MAX, TRANSCRIPT_LINES_MAX, TRANSCRIPT_TAIL_BYTES_MAX,
 };
@@ -389,22 +389,49 @@ fn strip_recap_hint(content: &str) -> String {
     text.to_string()
 }
 
-/// `cost-state` bills each model separately, keyed by the full id with the
-/// `[1m]` suffix intact. It is the one line that names the variant the session
-/// actually runs; assistant messages only ever carry the base id.
+/// `cost-state` totals the whole session and bills each model separately, keyed
+/// by the full id with the `[1m]` suffix intact. It is the one line that names
+/// the variant the session runs; assistant messages carry only the base id.
+///
+/// Every line restates the running total, so the newest one replaces the last
+/// rather than adding to it.
 fn parse_cost_state(entry: &Value, detail: &mut Detail) {
+    let money = |key: &str| entry.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+    let count = |key: &str| entry.get(key).and_then(Value::as_u64).unwrap_or(0);
+
+    let mut models = read_model_costs(entry);
+    // Highest cost first, by id where two match, so the pane
+    // holds still between refreshes.
+    models.sort_by(|a, b| b.cost_usd.total_cmp(&a.cost_usd).then(a.id.cmp(&b.id)));
+
+    detail.cost = Some(CostState {
+        cost_usd: money("totalCostUSD"),
+        lines_added: count("totalLinesAdded"),
+        lines_removed: count("totalLinesRemoved"),
+        api_ms: count("totalAPIDuration"),
+        api_ms_without_retries: count("totalAPIDurationWithoutRetries"),
+        tool_ms: count("totalToolDuration"),
+        total_ms: count("totalDuration"),
+        models,
+    });
+}
+
+/// `modelUsage` holds a `hasUnknownModelCost` flag beside the models, so only
+/// the keys whose value is an object name a model.
+fn read_model_costs(entry: &Value) -> Vec<ModelCost> {
     let Some(billed) = entry.get("modelUsage").and_then(Value::as_object) else {
-        return;
+        return Vec::new();
     };
-    for id in billed.keys() {
-        let Some(base) = id.strip_suffix(LONG_CONTEXT_SUFFIX) else {
-            continue;
-        };
-        if base.is_empty() || detail.long_context_models.iter().any(|seen| seen == base) {
-            continue;
-        }
-        detail.long_context_models.push(base.to_string());
-    }
+    billed
+        .iter()
+        .filter_map(|(id, usage)| {
+            let usage = usage.as_object()?;
+            Some(ModelCost {
+                id: id.clone(),
+                cost_usd: usage.get("costUSD").and_then(Value::as_f64).unwrap_or(0.0),
+            })
+        })
+        .collect()
 }
 
 fn parse_worktree(entry: &Value, detail: &mut Detail) {
@@ -570,35 +597,101 @@ mod tests {
         assert_eq!(detail.totals.assistant_messages, 2);
     }
 
+    /// A line as Claude Code writes it, kept whole so the field names stay
+    /// checked against the real thing.
+    const COST_LINE: &str = r#"{"type":"cost-state","sessionId":"b307a8ab","totalCostUSD":1.2217330000000002,"totalAPIDuration":132206,"totalAPIDurationWithoutRetries":132181,"totalToolDuration":2219,"totalLinesAdded":0,"totalLinesRemoved":0,"totalDuration":366380,"startTime":1787850088308,"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":909,"outputTokens":12,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.000969},"claude-opus-5[1m]":{"inputTokens":540,"outputTokens":9484,"cacheReadInputTokens":1143608,"cacheCreationInputTokens":40916,"webSearchRequests":0,"costUSD":1.2207640000000002},"hasUnknownModelCost":false}}"#;
+
+    fn costed(line: &str) -> CostState {
+        let mut lines = fixture();
+        lines.push(line.to_string());
+        let mut detail = Detail::default();
+        parse_lines(&lines, &mut detail);
+        detail.cost.expect("cost")
+    }
+
+    #[test]
+    fn a_cost_state_line_records_the_whole_session() {
+        let cost = costed(COST_LINE);
+
+        assert!((cost.cost_usd - 1.221_733).abs() < 1e-9);
+        assert_eq!(cost.lines_added, 0);
+        assert_eq!(cost.lines_removed, 0);
+        assert_eq!(cost.api_ms, 132_206);
+        assert_eq!(cost.api_ms_without_retries, 132_181);
+        assert_eq!(cost.tool_ms, 2_219);
+        assert_eq!(cost.total_ms, 366_380);
+
+        // `hasUnknownModelCost` sits beside the models and is not one of them.
+        assert_eq!(cost.models.len(), 2);
+        // Highest cost first, whatever order the line listed them in.
+        assert_eq!(cost.models[0].id, "claude-opus-5[1m]");
+        assert!((cost.models[0].cost_usd - 1.220_764).abs() < 1e-9);
+        assert_eq!(cost.models[1].id, "claude-haiku-4-5-20251001");
+        assert!((cost.models[1].cost_usd - 0.000_969).abs() < 1e-9);
+    }
+
     /// The `[1m]` variant appears nowhere else in the transcript, so this line
     /// is the only thing standing between a 1M session and a 5x overstated bar.
     #[test]
     fn cost_state_names_the_long_context_variant() {
-        let mut lines = fixture();
-        lines.push(
-            r#"{"type":"cost-state","sessionId":"s","totalCostUSD":13.4,"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":924},"claude-opus-5[1m]":{"inputTokens":36627}}}"#
-                .to_string(),
-        );
-
-        let mut detail = Detail::default();
-        parse_lines(&lines, &mut detail);
-
-        // Only the long one, and with the suffix off so it matches `model`.
-        assert_eq!(detail.long_context_models, vec!["claude-opus-5".to_string()]);
+        assert!(costed(COST_LINE).billed_long("claude-opus-5"));
     }
 
     #[test]
-    fn cost_state_without_a_long_model_records_nothing() {
+    fn cost_state_without_the_suffix_is_not_long() {
+        let cost = costed(
+            r#"{"type":"cost-state","sessionId":"s","modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":924},"claude-opus-5":{"inputTokens":36627}}}"#,
+        );
+        assert!(!cost.billed_long("claude-opus-5"));
+    }
+
+    /// Each line carries the running total, so summing them would bill the
+    /// session several times over.
+    #[test]
+    fn the_newest_cost_state_replaces_the_last() {
         let mut lines = fixture();
         lines.push(
-            r#"{"type":"cost-state","sessionId":"s","modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":924},"claude-opus-5":{"inputTokens":36627}}}"#
+            r#"{"type":"cost-state","sessionId":"s","totalCostUSD":1.0,"totalDuration":100,"modelUsage":{"claude-haiku-4-5-20251001":{"costUSD":1.0}}}"#
+                .to_string(),
+        );
+        lines.push(
+            r#"{"type":"cost-state","sessionId":"s","totalCostUSD":2.5,"totalDuration":900,"modelUsage":{"claude-opus-5":{"costUSD":2.5}}}"#
                 .to_string(),
         );
 
         let mut detail = Detail::default();
         parse_lines(&lines, &mut detail);
 
-        assert!(detail.long_context_models.is_empty());
+        let cost = detail.cost.expect("cost");
+        assert!((cost.cost_usd - 2.5).abs() < 1e-9);
+        assert_eq!(cost.total_ms, 900);
+        assert_eq!(cost.models.len(), 1);
+        assert_eq!(cost.models[0].id, "claude-opus-5");
+    }
+
+    #[test]
+    fn a_cost_state_without_model_usage_keeps_its_totals() {
+        let cost = costed(r#"{"type":"cost-state","sessionId":"s","totalCostUSD":0.42}"#);
+
+        assert!((cost.cost_usd - 0.42).abs() < 1e-9);
+        assert_eq!(cost.total_ms, 0);
+        assert!(cost.models.is_empty());
+    }
+
+    /// `parse_lines` drops every sidechain entry before it dispatches, so a
+    /// subagent's bill never reaches the parser at all.
+    #[test]
+    fn a_sidechain_cost_state_never_lands() {
+        let mut lines = fixture();
+        lines.push(
+            r#"{"type":"cost-state","isSidechain":true,"sessionId":"s","totalCostUSD":9.9,"modelUsage":{"claude-opus-5[1m]":{"costUSD":9.9}}}"#
+                .to_string(),
+        );
+
+        let mut detail = Detail::default();
+        parse_lines(&lines, &mut detail);
+
+        assert!(detail.cost.is_none());
     }
 
     /// The lines the Activity pane reads, in the shape the real transcript
