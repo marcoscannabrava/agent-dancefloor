@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use dancefloor::app::{App, Focus, Tab};
 use dancefloor::model::{
-    Activity, ContextUsage, Detail, Driver, ProcStat, PullRequest, Session, Status, Subagent,
-    TailTotals, ToolCall, Turn, Worktree,
+    Activity, ContextUsage, Detail, Driver, Limits, ProcStat, PullRequest, Session, Status,
+    Subagent, TailTotals, ToolCall, Turn, Worktree,
 };
 use dancefloor::ui;
 use ratatui::backend::TestBackend;
@@ -111,7 +111,11 @@ fn populated_session() -> Session {
 }
 
 fn app_with(sessions: Vec<Session>) -> App {
-    let mut app = App::new(PathBuf::from("/nonexistent"), Duration::from_secs(2), None);
+    let mut app = App::new(
+        PathBuf::from("/nonexistent"),
+        Duration::from_secs(2),
+        Limits::default(),
+    );
     app.sessions = sessions;
     app
 }
@@ -352,8 +356,14 @@ fn detail_pane_shows_the_session_facts() {
     assert!(screen.contains("#863"), "pr missing:\n{screen}");
     assert!(screen.contains("main"), "branch missing:\n{screen}");
     // 105_843 of an inferred 200k window, and the ~ must say it was inferred.
-    assert!(screen.contains("105k / 200k~"), "context missing:\n{screen}");
-    assert!(screen.contains("53%"), "context percentage missing:\n{screen}");
+    assert!(
+        screen.contains("105k / 200k~"),
+        "context missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("53%"),
+        "context percentage missing:\n{screen}"
+    );
 }
 
 /// The bug this guards: a 1M session under 200k of usage was measured against
@@ -373,14 +383,23 @@ fn a_long_window_is_believed_before_usage_proves_it() {
     let app = app_with(vec![session.clone()]);
     let screen = render(&app, 140, 40);
     assert!(screen.contains("169k / 200k~"), "guess missing:\n{screen}");
-    assert!(screen.contains("85%"), "guess percentage missing:\n{screen}");
+    assert!(
+        screen.contains("85%"),
+        "guess percentage missing:\n{screen}"
+    );
 
     // A cost-state line billed this model at [1m], so the guess is over.
     session.detail.long_context_models = vec!["claude-opus-5".into()];
     let app = app_with(vec![session.clone()]);
     let screen = render(&app, 140, 40);
-    assert!(screen.contains("169k / 1.0M"), "recorded missing:\n{screen}");
-    assert!(!screen.contains("1.0M~"), "recorded still a guess:\n{screen}");
+    assert!(
+        screen.contains("169k / 1.0M"),
+        "recorded missing:\n{screen}"
+    );
+    assert!(
+        !screen.contains("1.0M~"),
+        "recorded still a guess:\n{screen}"
+    );
     assert!(screen.contains("17%"), "recorded percentage:\n{screen}");
 
     // Settings alone carry the same weight once the family matches.
@@ -388,7 +407,10 @@ fn a_long_window_is_believed_before_usage_proves_it() {
     session.configured_model = Some("opus[1m]".into());
     let app = app_with(vec![session.clone()]);
     let screen = render(&app, 140, 40);
-    assert!(screen.contains("169k / 1.0M"), "configured missing:\n{screen}");
+    assert!(
+        screen.contains("169k / 1.0M"),
+        "configured missing:\n{screen}"
+    );
 
     // ...but not for a session that moved to another model.
     session.detail.model = Some("claude-sonnet-5".into());

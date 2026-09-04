@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod clipboard;
+pub mod config;
 pub mod discovery;
 pub mod model;
 pub mod settings;

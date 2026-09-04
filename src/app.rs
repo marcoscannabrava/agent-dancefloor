@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::model::{Session, ToolCall};
+use crate::model::{Limits, Session, ToolCall};
 use crate::{clipboard, discovery, settings, subagents, transcript};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,7 +92,7 @@ pub struct App {
     pub tool_cursor: usize,
     /// What the last copy did. Shown in the open tool, cleared when it closes.
     pub copy_notice: Option<String>,
-    pub context_limit: Option<u64>,
+    pub limits: Limits,
     pub interval: Duration,
     pub last_refresh: Instant,
     pub scan_error: Option<String>,
@@ -104,7 +104,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(claude_home: PathBuf, interval: Duration, context_limit: Option<u64>) -> Self {
+    pub fn new(claude_home: PathBuf, interval: Duration, limits: Limits) -> Self {
         Self {
             claude_home,
             sessions: Vec::new(),
@@ -114,7 +114,7 @@ impl App {
             focus: Focus::Sessions,
             tool_cursor: 0,
             copy_notice: None,
-            context_limit,
+            limits,
             interval,
             last_refresh: Instant::now(),
             scan_error: None,
@@ -185,25 +185,28 @@ impl App {
     }
 
     fn sort_sessions(&mut self) {
-        let limit = self.context_limit;
+        let limits = self.limits;
         let now = Self::now_ms();
         match self.sort {
             // Waiting first, then busy, then the name: the sessions that need a
             // human stay on top, and the ordering is stable between refreshes.
-            Sort::Status => self
-                .sessions
-                .sort_by(|a, b| match (a.status as u8).cmp(&(b.status as u8)) {
-                    std::cmp::Ordering::Equal => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                    other => other,
-                }),
+            Sort::Status => {
+                self.sessions
+                    .sort_by(|a, b| match (a.status as u8).cmp(&(b.status as u8)) {
+                        std::cmp::Ordering::Equal => {
+                            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                        }
+                        other => other,
+                    })
+            }
             Sort::Context => self.sessions.sort_by(|a, b| {
-                b.context_ratio(limit)
-                    .partial_cmp(&a.context_ratio(limit))
+                b.context_ratio(limits)
+                    .partial_cmp(&a.context_ratio(limits))
                     .unwrap_or(std::cmp::Ordering::Equal)
             }),
             Sort::Uptime => self
                 .sessions
-                .sort_by(|a, b| b.uptime_secs(now).cmp(&a.uptime_secs(now))),
+                .sort_by_key(|session| std::cmp::Reverse(session.uptime_secs(now))),
             Sort::Directory => self.sessions.sort_by(|a, b| {
                 a.dir_label()
                     .to_lowercase()
