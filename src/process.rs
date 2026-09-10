@@ -17,6 +17,10 @@ pub fn snapshot() -> ProcessSnapshot {
 
 pub fn parse_snapshot(text: &str) -> ProcessSnapshot {
     let mut processes = Vec::new();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok());
     for line in text.lines() {
         let mut fields = line.split_whitespace();
         let (Some(pid), Some(ppid), Some(elapsed), Some(rss), Some(cpu), Some(executable)) = (
@@ -31,11 +35,19 @@ pub fn parse_snapshot(text: &str) -> ProcessSnapshot {
         };
         let Ok(pid) = pid.parse() else { continue };
         let args = fields.map(str::to_owned).collect::<Vec<_>>();
+        let elapsed_secs = parse_elapsed(elapsed);
+        let started_at_ms = now_ms.zip(elapsed_secs).map(|(now, elapsed)| {
+            now.saturating_sub(
+                i64::try_from(elapsed)
+                    .unwrap_or(i64::MAX)
+                    .saturating_mul(1000),
+            )
+        });
         processes.push(ProcessInfo {
             pid,
             ppid: ppid.parse().ok(),
-            started_at_ms: None,
-            elapsed_secs: parse_elapsed(elapsed),
+            started_at_ms,
+            elapsed_secs,
             rss_kib: rss.parse().unwrap_or(0),
             cpu_percent: cpu.parse().unwrap_or(0.0),
             executable: executable.to_owned(),
