@@ -107,6 +107,7 @@ fn populated_session() -> Session {
                 bytes: 18_432,
                 client: None,
                 session_id: None,
+                transcript: None,
             }],
             read_error: None,
         },
@@ -496,4 +497,122 @@ fn empty_state_explains_itself_rather_than_showing_a_blank_pane() {
         screen.contains("No live sessions"),
         "empty hint missing:\n{screen}"
     );
+}
+
+fn agent(index: usize, transcript: Option<PathBuf>) -> Subagent {
+    Subagent {
+        name: format!("agent {index}"),
+        agent_type: "Explore".into(),
+        description: format!("look into part {index}"),
+        spawn_depth: 1,
+        age_secs: Some(index as u64),
+        bytes: 2048,
+        client: None,
+        session_id: None,
+        transcript,
+    }
+}
+
+#[test]
+fn the_agents_pane_scrolls_under_the_cursor() {
+    let mut session = populated_session();
+    session.detail.subagents = (0..40).map(|i| agent(i, None)).collect();
+    let mut app = app_with(vec![session]);
+    app.tab = Tab::Agents;
+
+    let screen = render(&app, 140, 24);
+    assert!(screen.contains("agents  40"), "count missing:\n{screen}");
+    assert!(
+        screen.contains("agent 0 "),
+        "first agent missing:\n{screen}"
+    );
+
+    app.focus_pane();
+    for _ in 0..30 {
+        app.cursor_down();
+    }
+    assert_eq!(app.agent_cursor, 30);
+    let screen = render(&app, 140, 24);
+    assert!(screen.contains("31 of 40"), "position missing:\n{screen}");
+    assert!(screen.contains("agent 30"), "cursor row missing:\n{screen}");
+    assert!(
+        !screen.contains("agent 0 "),
+        "list did not scroll:\n{screen}"
+    );
+    assert_eq!(selection_bg(&app, "agent 30"), Some(Color::Indexed(238)));
+
+    for _ in 0..30 {
+        app.cursor_down();
+    }
+    assert_eq!(app.agent_cursor, 39, "cursor ran past the end");
+}
+
+#[test]
+fn enter_on_an_agent_opens_its_thread() {
+    let log = std::env::temp_dir().join(format!("dancefloor-thread-{}.jsonl", std::process::id()));
+    let lines = [
+        r#"{"type":"user","isSidechain":true,"agentId":"a1","message":{"content":"find the bug"}}"#,
+        r#"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"content":[{"type":"thinking","thinking":"check the parser"},{"type":"tool_use","name":"Grep","input":{"pattern":"fn parse"}}]}}"#,
+    ];
+    let mut text = lines.join("\n");
+    std::fs::write(&log, &text).expect("write log");
+
+    let mut session = populated_session();
+    session.detail.subagents = vec![agent(0, Some(log.clone()))];
+    let mut app = app_with(vec![session]);
+    app.tab = Tab::Agents;
+    app.focus_pane();
+    app.open_selected();
+    assert_eq!(app.focus, Focus::Thread);
+
+    let screen = render(&app, 120, 30);
+    for needle in ["find the bug", "check the parser", "Grep", "fn parse"] {
+        assert!(screen.contains(needle), "{needle} missing:\n{screen}");
+    }
+
+    // A live log grows; the open thread follows.
+    for i in 0..60 {
+        text.push_str(&format!(
+            "\n{{\"type\":\"assistant\",\"isSidechain\":true,\"agentId\":\"a1\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"reply {i}\"}}]}}}}"
+        ));
+    }
+    std::fs::write(&log, &text).expect("grow log");
+    app.refresh();
+    app.thread_end();
+    let screen = render(&app, 120, 30);
+    assert!(screen.contains("reply 59"), "end not shown:\n{screen}");
+    assert!(
+        !screen.contains("find the bug"),
+        "did not scroll:\n{screen}"
+    );
+
+    app.thread_home();
+    app.scroll_thread(-5);
+    let screen = render(&app, 120, 30);
+    assert!(screen.contains("find the bug"), "top not shown:\n{screen}");
+
+    app.close_thread();
+    assert_eq!(app.focus, Focus::Pane);
+    assert!(app.thread.is_none());
+    let _ = std::fs::remove_file(&log);
+}
+
+#[test]
+fn renders_an_open_thread_at_every_size() {
+    let log = std::env::temp_dir().join(format!("dancefloor-sizes-{}.jsonl", std::process::id()));
+    std::fs::write(
+        &log,
+        r#"{"type":"user","message":{"content":"a prompt long enough to wrap at the smaller sizes"}}"#,
+    )
+    .expect("write log");
+    let mut session = populated_session();
+    session.detail.subagents = vec![agent(0, Some(log.clone()))];
+    let mut app = app_with(vec![session]);
+    app.tab = Tab::Agents;
+    app.focus_pane();
+    app.open_selected();
+    for (width, height) in SIZES {
+        render(&app, width, height);
+    }
+    let _ = std::fs::remove_file(&log);
 }

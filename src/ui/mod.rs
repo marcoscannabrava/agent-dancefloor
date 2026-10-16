@@ -3,6 +3,7 @@
 mod activity;
 mod detail;
 mod list;
+mod thread;
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
@@ -76,6 +77,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     if app.focus == Focus::Tool {
         activity::draw_tool(frame, app, frame.area());
+    }
+    if app.focus == Focus::Thread {
+        thread::draw(frame, app, frame.area());
     }
     if app.show_help {
         draw_help(frame, frame.area());
@@ -167,13 +171,20 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         ],
         Focus::Pane => &[
             ("↑/↓", "scroll"),
-            ("enter", "open call"),
+            ("enter", "open"),
             ("esc", "sessions"),
             ("tab", "pane"),
             ("1-5", "jump"),
             ("q", "quit"),
         ],
         Focus::Tool => &[("y", "copy"), ("esc", "close")],
+        Focus::Thread => &[
+            ("j/k", "scroll"),
+            ("space/b", "page"),
+            ("g/G", "ends"),
+            ("o", "raw log"),
+            ("esc", "close"),
+        ],
     };
     let mut spans = Vec::new();
     for (key, action) in keys {
@@ -201,7 +212,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::raw(""),
         label_value("j / ↓", "next session"),
         label_value("k / ↑", "previous session"),
-        label_value("enter", "focus the pane, then open a tool call"),
+        label_value("enter", "focus the pane, then open a call or agent"),
         label_value("esc", "back to the session list"),
         label_value("tab / l", "next pane"),
         label_value("shift-tab", "previous pane"),
@@ -209,6 +220,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         label_value("s", "cycle sort order"),
         label_value("r", "refresh now"),
         label_value("y", "copy an open tool call"),
+        label_value("g / G", "top or end of an agent thread"),
         label_value("o", "open the raw log in $EDITOR"),
         label_value("O", "open a digest: thinking, commands, agents"),
         label_value("? ", "close this help"),

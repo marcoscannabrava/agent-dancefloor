@@ -301,6 +301,8 @@ pub struct Subagent {
     pub bytes: u64,
     pub client: Option<ClientKind>,
     pub session_id: Option<String>,
+    /// The agent's own conversation log.
+    pub transcript: Option<PathBuf>,
 }
 
 /// Everything recovered from a session's transcript file.

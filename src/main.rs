@@ -102,6 +102,21 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         return;
     }
 
+    if app.focus == Focus::Thread {
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => app.scroll_thread(1),
+            KeyCode::Char('k') | KeyCode::Up => app.scroll_thread(-1),
+            KeyCode::PageDown | KeyCode::Char(' ') => app.page_thread(1),
+            KeyCode::PageUp | KeyCode::Char('b') => app.page_thread(-1),
+            KeyCode::Char('g') | KeyCode::Home => app.thread_home(),
+            KeyCode::Char('G') | KeyCode::End => app.thread_end(),
+            KeyCode::Char('o') => app.open_raw_log(),
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.close_thread(),
+            _ => {}
+        }
+        return;
+    }
+
     match code {
         KeyCode::Char('q') => app.should_quit = true,
         // `esc` leaves the pane before it leaves the app.
@@ -111,15 +126,15 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         },
         KeyCode::Enter => match app.focus {
             Focus::Sessions => app.focus_pane(),
-            _ => app.open_tool(),
+            _ => app.open_selected(),
         },
         KeyCode::Char('j') | KeyCode::Down => match app.focus {
             Focus::Sessions => app.select_next(),
-            _ => app.select_next_tool(),
+            _ => app.cursor_down(),
         },
         KeyCode::Char('k') | KeyCode::Up => match app.focus {
             Focus::Sessions => app.select_previous(),
-            _ => app.select_previous_tool(),
+            _ => app.cursor_up(),
         },
         KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => app.next_tab(),
         KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => app.previous_tab(),
@@ -286,9 +301,10 @@ usage passes 200k, unless this default says otherwise.
 
 KEYS:
     j k        move between sessions
-    enter      focus the pane, then open a tool call
+    enter      focus the pane, then open a tool call or agent
     esc        back to the session list
     y          copy an open tool call
+    g G        top or end of an open agent thread
     o          open the raw log in $EDITOR
     O          open a digest: thinking, commands, agents
     tab        next pane, shift-tab previous

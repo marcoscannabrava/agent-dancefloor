@@ -1,10 +1,12 @@
 //! Application state and the input handling that mutates it.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::model::{ClientKind, Limits, Session, SessionKey, ToolCall};
+use crate::digest::Step;
+use crate::model::{ClientKind, Limits, Session, SessionKey, Subagent, ToolCall};
 use crate::{clipboard, digest, process, providers, settings, subagents, transcript};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +52,29 @@ pub enum Focus {
     Pane,
     /// The selected tool call, open in full. `esc` closes it.
     Tool,
+    /// The selected agent's thread, open in full. `esc` closes it.
+    Thread,
+}
+
+/// One subagent's conversation, open on screen.
+pub struct Thread {
+    pub title: String,
+    pub path: PathBuf,
+    pub steps: Vec<Step>,
+    /// Log size at the last read.
+    bytes: u64,
+    /// First row shown. `usize::MAX` follows the end.
+    pub scroll: usize,
+    /// Set by draw, which knows the width.
+    pub max_scroll: Cell<usize>,
+    pub page: Cell<usize>,
+}
+
+impl Thread {
+    /// The row the draw shows first.
+    pub fn top(&self) -> usize {
+        self.scroll.min(self.max_scroll.get())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +116,9 @@ pub struct App {
     /// Which tool the Activity pane points at, newest first. It survives a
     /// refresh, so a list that grows under the cursor does not move it.
     pub tool_cursor: usize,
+    /// Which agent the Agents pane points at.
+    pub agent_cursor: usize,
+    pub thread: Option<Thread>,
     /// What the last copy did. Shown in the open tool, cleared when it closes.
     pub copy_notice: Option<String>,
     /// A file to open in the editor.
@@ -122,6 +150,8 @@ impl App {
             sort: Sort::Status,
             focus: Focus::Sessions,
             tool_cursor: 0,
+            agent_cursor: 0,
+            thread: None,
             copy_notice: None,
             pending_open: None,
             notice: None,
@@ -151,6 +181,7 @@ impl App {
     /// highlighted, because sorting can move rows under the cursor.
     pub fn refresh(&mut self) {
         self.last_refresh = Instant::now();
+        self.reload_thread();
         let anchor = self.selected_session().map(Session::key);
         let snapshot = process::snapshot();
 
@@ -221,6 +252,9 @@ impl App {
         self.tool_cursor = self
             .tool_cursor
             .min(self.visible_tools().len().saturating_sub(1));
+        self.agent_cursor = self
+            .agent_cursor
+            .min(self.visible_agents().len().saturating_sub(1));
     }
 
     fn sort_sessions(&mut self) {
@@ -271,6 +305,7 @@ impl App {
         }
         self.selected = (self.selected + 1) % self.sessions.len();
         self.tool_cursor = 0;
+        self.agent_cursor = 0;
     }
 
     pub fn select_previous(&mut self) {
@@ -283,6 +318,7 @@ impl App {
             self.selected - 1
         };
         self.tool_cursor = 0;
+        self.agent_cursor = 0;
     }
 
     /// The tools the Activity pane lists, newest first.
@@ -307,6 +343,127 @@ impl App {
         self.tool_cursor = self.tool_cursor.saturating_sub(1);
     }
 
+    pub fn visible_agents(&self) -> &[Subagent] {
+        self.selected_session()
+            .map(|session| session.detail.subagents.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn selected_agent(&self) -> Option<&Subagent> {
+        self.visible_agents().get(self.agent_cursor)
+    }
+
+    pub fn select_next_agent(&mut self) {
+        let last = self.visible_agents().len().saturating_sub(1);
+        self.agent_cursor = (self.agent_cursor + 1).min(last);
+    }
+
+    pub fn select_previous_agent(&mut self) {
+        self.agent_cursor = self.agent_cursor.saturating_sub(1);
+    }
+
+    /// Move the cursor of the current tab.
+    pub fn cursor_down(&mut self) {
+        match self.tab {
+            Tab::Agents => self.select_next_agent(),
+            _ => self.select_next_tool(),
+        }
+    }
+
+    pub fn cursor_up(&mut self) {
+        match self.tab {
+            Tab::Agents => self.select_previous_agent(),
+            _ => self.select_previous_tool(),
+        }
+    }
+
+    /// Open what the cursor points at.
+    pub fn open_selected(&mut self) {
+        match self.tab {
+            Tab::Agents => self.open_thread(),
+            _ => self.open_tool(),
+        }
+    }
+
+    pub fn open_thread(&mut self) {
+        let Some(agent) = self.selected_agent() else {
+            return;
+        };
+        let Some(path) = agent.transcript.clone() else {
+            self.notice = Some("no log for this agent".to_string());
+            return;
+        };
+        let title = match agent.agent_type.is_empty() {
+            true => agent.name.clone(),
+            false => format!("{} · {}", agent.agent_type, agent.name),
+        };
+        let thread = match digest::thread(&path) {
+            Ok(steps) => Thread {
+                title,
+                bytes: file_size(&path),
+                path,
+                steps,
+                scroll: 0,
+                max_scroll: Cell::new(0),
+                page: Cell::new(1),
+            },
+            Err(error) => {
+                self.notice = Some(format!("read failed: {error}"));
+                return;
+            }
+        };
+        self.thread = Some(thread);
+        self.focus = Focus::Thread;
+    }
+
+    pub fn close_thread(&mut self) {
+        self.thread = None;
+        self.focus = Focus::Pane;
+    }
+
+    /// Re-read a live log that grew.
+    fn reload_thread(&mut self) {
+        let Some(thread) = self.thread.as_mut() else {
+            return;
+        };
+        let bytes = file_size(&thread.path);
+        if bytes == thread.bytes {
+            return;
+        }
+        if let Ok(steps) = digest::thread(&thread.path) {
+            thread.steps = steps;
+            thread.bytes = bytes;
+        }
+    }
+
+    /// Scroll by rows. The end follows growth.
+    pub fn scroll_thread(&mut self, rows: isize) {
+        let Some(thread) = self.thread.as_mut() else {
+            return;
+        };
+        let max = thread.max_scroll.get();
+        let next = thread.top().saturating_add_signed(rows).min(max);
+        thread.scroll = if next == max { usize::MAX } else { next };
+    }
+
+    /// Scroll by a page, signed.
+    pub fn page_thread(&mut self, pages: isize) {
+        let page = self.thread.as_ref().map_or(1, |t| t.page.get().max(1));
+        self.scroll_thread(pages * page as isize);
+    }
+
+    pub fn thread_home(&mut self) {
+        if let Some(thread) = self.thread.as_mut() {
+            thread.scroll = 0;
+        }
+    }
+
+    pub fn thread_end(&mut self) {
+        if let Some(thread) = self.thread.as_mut() {
+            thread.scroll = usize::MAX;
+        }
+    }
+
     /// Step into the pane. A pane with nothing to point at still takes focus, so
     /// that `enter` and `esc` mean the same thing on every tab.
     pub fn focus_pane(&mut self) {
@@ -314,6 +471,9 @@ impl App {
         self.tool_cursor = self
             .tool_cursor
             .min(self.visible_tools().len().saturating_sub(1));
+        self.agent_cursor = self
+            .agent_cursor
+            .min(self.visible_agents().len().saturating_sub(1));
     }
 
     pub fn focus_sessions(&mut self) {
@@ -354,6 +514,10 @@ impl App {
 
     /// Queue the raw log for the editor.
     pub fn open_raw_log(&mut self) {
+        if let Some(thread) = &self.thread {
+            self.pending_open = Some(thread.path.clone());
+            return;
+        }
         match self
             .selected_session()
             .and_then(|s| s.detail.transcript.clone())
@@ -389,4 +553,8 @@ impl App {
         self.sort = self.sort.next();
         self.sort_sessions();
     }
+}
+
+fn file_size(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }

@@ -54,9 +54,10 @@ A token count is written `1m`, `200k` or `750000`. Both flags also take
 | Key         | Action                              |
 | ----------- | ----------------------------------- |
 | `j` `k` `↑` `↓` | Move between sessions, or scroll the focused pane |
-| `enter`     | Focus the pane, then open the tool call under the cursor |
+| `enter`     | Focus the pane, then open the tool call or agent under the cursor |
 | `esc`       | Back to the session list            |
 | `y`         | Copy an open tool call              |
+| `space` `b` `g` `G` | Page down, page up, top, or end of an open agent thread |
 | `o`         | Open the raw session log in your editor |
 | `O`         | Open a digest of the session in your editor |
 | `tab`       | Next pane, `shift-tab` for previous |
@@ -102,7 +103,10 @@ directory, the git branch, the worktree, the pull request, the model, the permis
 uptime, and the process cost.
 
 **Agents** lists the subagents the session spawned. Each entry names the agent type, the prompt
-or skill it runs, and how long its transcript has been idle.
+or skill it runs, and how long its transcript has been idle. Press `enter` to focus the list and
+scroll it. Press `enter` on an agent to open its thread: the prompt, the thinking, the tool
+calls, and the replies. The thread reloads when the agent writes more. In the thread, `o` opens
+the agent's raw log, and `esc` closes the thread.
 
 **Prompt** shows the last prompt the user submitted, with the session title above it.
 

@@ -12,9 +12,11 @@ use crate::model::{ClientKind, Session};
 
 /// One thing an agent did.
 #[derive(Debug, PartialEq)]
-enum Step {
+pub enum Step {
     Prompt(String),
     Thinking(String),
+    /// Text the agent wrote back.
+    Reply(String),
     Call {
         tool: String,
         summary: String,
@@ -65,6 +67,11 @@ pub fn write(session: &Session) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Read one Claude agent log.
+pub fn thread(log: &Path) -> std::io::Result<Vec<Step>> {
+    read_steps(ClientKind::Claude, log)
+}
+
 fn read_steps(client: ClientKind, log: &Path) -> std::io::Result<Vec<Step>> {
     let file = std::fs::File::open(log)?;
     let mut steps = Vec::new();
@@ -102,6 +109,7 @@ fn claude_steps(entry: &Value, steps: &mut Vec<Step>) {
             for block in content.and_then(Value::as_array).into_iter().flatten() {
                 match block.get("type").and_then(Value::as_str) {
                     Some("thinking") => push_thinking(steps, block.get("thinking")),
+                    Some("text") => push_reply(steps, block.get("text")),
                     Some("tool_use") => push_call(steps, block.get("name"), block.get("input")),
                     _ => {}
                 }
@@ -204,6 +212,14 @@ fn push_thinking(steps: &mut Vec<Step>, text: Option<&Value>) {
     match text.and_then(Value::as_str).map(str::trim) {
         Some(text) if !text.is_empty() => steps.push(Step::Thinking(text.to_string())),
         _ => steps.push(Step::Thinking("(redacted)".to_string())),
+    }
+}
+
+fn push_reply(steps: &mut Vec<Step>, text: Option<&Value>) {
+    if let Some(text) = text.and_then(Value::as_str).map(str::trim) {
+        if !text.is_empty() {
+            steps.push(Step::Reply(text.to_string()));
+        }
     }
 }
 
@@ -326,6 +342,8 @@ fn render(session: &Session, log: &Path, tracks: &[Track]) -> String {
                     let _ = writeln!(out, "#### Thinking\n");
                     let _ = writeln!(out, "{}", quote(text));
                 }
+                // The digest skips replies.
+                Step::Reply(_) => {}
                 Step::Call {
                     tool,
                     summary,
@@ -355,11 +373,7 @@ fn is_shell(tool: &str) -> bool {
 
 /// Fence longer than any backtick run inside.
 fn fence(lang: &str, text: &str) -> String {
-    let longest = text
-        .split(|c| c != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let ticks = "`".repeat(longest.max(2) + 1);
     format!("{ticks}{lang}\n{}\n{ticks}", text.trim_end())
 }
@@ -403,6 +417,7 @@ mod tests {
             vec![
                 Step::Prompt("fix it".into()),
                 Step::Thinking("look first".into()),
+                Step::Reply("hi".into()),
                 Step::Call {
                     tool: "Bash".into(),
                     summary: "List".into(),
