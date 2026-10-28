@@ -2,31 +2,18 @@
 
 A terminal dashboard for your live Claude Code, Codex, and Pi sessions. It is `lazydocker` for agents.
 
-`dancefloor` finds every supported coding-agent session running on this machine. It shows where
-each session works, what it runs, how full its recorded context window is, and which subagents it
-recorded.
+![dancefloor dashboard](screenshot.png)
 
-```
- dancefloor  5 sessions · 1 busy · sort status · every 2s
-┌ Sessions ───────────────────────────────┐┌───────────────────────────────────────────────────────────────────┐
-│● api-server         api-ser… █████░  75%││ 1 Detail  │  2 Agents  │  3 Prompt  │  4 Usage  │  5 Activity     │
-│○ checkout-flow      web-shop ███░░░  44%││checkout-flow  ○ idle for 2m18s                                    │
-│○ flaky-e2e          web-sho… ████░░  53%││                                                                   │
-│○ docs-sweep         docs-si… ░░░░░░   0%││title       Split the checkout reducer                             │
-│○ perf-audit         web-shop ██░░░░  25%││cwd         /Users/you/code/web-shop                               │
-│                                         ││branch      refactor/checkout-reducer                              │
-│                                         ││pr          #128 acme/web-shop                                     │
-│                                         ││pr url      https://github.com/acme/web-shop/pull/128              │
-│                                         ││model       claude-opus-5                                          │
-│                                         ││mode        normal · perms auto                                    │
-│                                         ││                                                                   │
-│                                         ││uptime      1d1h                                                   │
-│                                         ││last write  2m18s ago                                              │
-│                                         ││ context  445k / 1.0M                                              │
-│                                         ││██████████████████████████████  44%                                │
-└─────────────────────────────────────────┘└───────────────────────────────────────────────────────────────────┘
- j/k move tab pane 1-5 jump s sort r refresh ? help q quit
-```
+## Features
+
+- **Finds every live session** of Claude Code, Codex, and Pi on this machine.
+- **Shows the status** of each session: waiting for you, busy, or idle.
+- **Shows context use** as a coloured bar per session.
+- **Lists subagents** and opens the full thread of each one.
+- **Streams tool calls**, newest first. You can open a call or copy its command.
+- **Opens the raw log** or a readable Markdown digest in your editor.
+- **Prints a plain-text table** with `--once`, for scripts and pipes.
+- **Read-only.** It reads local files. It does not call an API or change agent state.
 
 ## Install
 
@@ -34,7 +21,7 @@ recorded.
 cargo install --path .
 ```
 
-The binary lands in `~/.cargo/bin/dancefloor`.
+The binary goes to `~/.cargo/bin/dancefloor`.
 
 ## Use
 
@@ -46,46 +33,130 @@ dancefloor --context-limit 1m     # pin the context window for every session
 dancefloor --context-default 1m   # the window to assume when a session proves nothing
 ```
 
-A token count is written `1m`, `200k` or `750000`. Both flags also take
-`--flag=value`.
+- A token count can be `1m`, `200k`, or `750000`.
+- All flags also accept `--flag=value`.
+- `--interval` (or `-i`) takes 1 to 3600 seconds.
+- `-h` shows help. `-V` shows the version.
 
-### Keys
+### The `--once` table
 
-| Key         | Action                              |
-| ----------- | ----------------------------------- |
-| `j` `k` `↑` `↓` | Move between sessions, or scroll the focused pane |
-| `enter`     | Focus the pane, then open the tool call or agent under the cursor |
-| `esc`       | Back to the session list            |
-| `y`         | Copy an open tool call              |
-| `space` `b` `g` `G` | Page down, page up, top, or end of an open agent thread |
-| `o`         | Open the raw session log in your editor |
-| `O`         | Open a digest of the session in your editor |
-| `tab`       | Next pane, `shift-tab` for previous |
-| `1` to `5`  | Jump to Detail, Agents, Prompt, Usage, Activity |
-| `s`         | Cycle the sort order                |
-| `r`         | Refresh now                         |
-| `?`         | Help                                |
-| `q`         | Quit                                |
+The table has these columns: status, client, name, directory, context %, model, and uptime.
+Provider errors go to stderr, so the table stays clean in a pipe.
 
-`enter` moves the keys from the session list into the pane; the coloured border says which
-half has them. `esc` gives them back.
+## The session list
 
-The sort order cycles through status, context, uptime, and directory. Status sorts busy
-sessions first.
+Each row shows:
 
-`o` and `O` use `$VISUAL`, then `$EDITOR`, then `vi`. The dashboard waits until the editor
-closes.
+- **Status glyph:**
+  - `●?` (yellow): the session waits for you.
+  - `●`: busy.
+  - `○`: idle.
+- **Name** of the session.
+- **Context bar and percent:**
+  - Green: below 60%.
+  - Yellow: 60% to 85%.
+  - Red: 85% and above.
 
-The digest is a Markdown file in `$TMPDIR/dancefloor/`. It lists the prompts, the thinking,
-and each tool call with its full command. Each agent gets its own section, so you can see
-which agent did what. For Claude Code, each subagent section shows the agent type and task.
-It reads the whole log, not only the tail. Codex usually encrypts its reasoning, so the digest
-shows `(encrypted)` for those steps.
+Press `s` to change the sort order:
+
+- **Status:** waiting sessions first, then busy, then idle. Ties sort by name.
+- **Context:** fullest first.
+- **Uptime:** longest-running first.
+- **Directory:** A to Z.
+
+## Keys
+
+### Session list and panes
+
+| Key                     | Action                                                     |
+| ----------------------- | ---------------------------------------------------------- |
+| `j` `k` `↑` `↓`         | Move between sessions, or move the cursor in a focused pane |
+| `enter`                 | Focus the pane, then open the tool call or agent under the cursor |
+| `esc`                   | Go back to the session list. From the list, quit.          |
+| `tab` `l` `→`           | Next pane                                                  |
+| `shift-tab` `h` `←`     | Previous pane                                              |
+| `1` to `5`              | Go to Detail, Agents, Prompt, Usage, or Activity           |
+| `o`                     | Open the raw session log in your editor                    |
+| `O`                     | Open a digest of the session in your editor                |
+| `s`                     | Change the sort order                                      |
+| `r`                     | Refresh now                                                |
+| `?`                     | Help                                                       |
+| `q` `ctrl-c`            | Quit                                                       |
+
+The coloured border shows which half has the keys: the session list or the pane.
+
+### Open agent thread
+
+| Key                     | Action                       |
+| ----------------------- | ---------------------------- |
+| `j` `k` `↑` `↓`         | Scroll one line              |
+| `space` `pgdn`          | Page down                    |
+| `b` `pgup`              | Page up                      |
+| `g` `home`              | Go to the top                |
+| `G` `end`               | Go to the end                |
+| `o`                     | Open the agent's raw log     |
+| `esc` `enter` `q`       | Close the thread             |
+
+### Open tool call
+
+| Key                     | Action                         |
+| ----------------------- | ------------------------------ |
+| `y`                     | Copy the full command          |
+| `esc` `enter` `q`       | Close the tool call            |
+
+## The panes
+
+### 1. Detail
+
+- Session name and status, and how long it has had that status.
+- Directory, git branch, worktree, and pull request.
+- Model and permission mode.
+- Uptime, and CPU and memory of the process.
+
+### 2. Agents
+
+- One row for each subagent that the session started.
+- Each row shows the agent type, its prompt or skill, and how long it has been idle.
+- Press `enter` on an agent to open its thread: the prompt, the thinking, the tool calls, and
+  the replies.
+- The thread reloads when the agent writes more.
+
+### 3. Prompt
+
+- The last prompt that the user sent.
+- The session title above it.
+
+### 4. Usage
+
+- The newest request, split into input, cache read, cache write, and output tokens.
+- Totals for recent activity in the part of the transcript that was read.
+
+### 5. Activity
+
+- The recap that Claude writes when you leave a session. A recap is a `/config` setting, so
+  most sessions do not have one.
+- The skill or MCP tool that drives the turn.
+- The length of the last turn.
+- The files that the session edited.
+- Every tool call, newest first. Each row shows the summary of the call and the command.
+- Press `enter` to open a call. Press `y` to copy its full command.
+
+## Editor and digest
+
+- `o` and `O` use `$VISUAL`, then `$EDITOR`, then `vi`.
+- The dashboard waits until the editor closes.
+- The digest is a Markdown file in `$TMPDIR/dancefloor/`. It contains:
+  - The prompts and the thinking.
+  - Each tool call with its full command.
+  - One section for each agent, so you can see which agent did what.
+  - For Claude Code, the type and task of each subagent.
+- The digest reads the full log, not only the tail.
+- Codex usually encrypts its reasoning. The digest shows `(encrypted)` for those steps.
 
 ## Config
 
-`~/.config/dancefloor/config.json` sets the default context window, so you do not pass
-`--context-default` on every run. `$XDG_CONFIG_HOME` is honoured when it is set.
+Set the default context window in `~/.config/dancefloor/config.json`. Then you do not need
+`--context-default` on each run. `dancefloor` uses `$XDG_CONFIG_HOME` when it is set.
 
 ```json
 {
@@ -93,91 +164,71 @@ shows `(encrypted)` for those steps.
 }
 ```
 
-The value takes the same shorthand as the flag, or a plain number. `--context-default`
-outranks the file. A missing or half-written file is not an error.
-
-## The panes
-
-**Detail** shows the session name, status, and how long it held that status. It also shows the
-directory, the git branch, the worktree, the pull request, the model, the permission mode, the
-uptime, and the process cost.
-
-**Agents** lists the subagents the session spawned. Each entry names the agent type, the prompt
-or skill it runs, and how long its transcript has been idle. Press `enter` to focus the list and
-scroll it. Press `enter` on an agent to open its thread: the prompt, the thinking, the tool
-calls, and the replies. The thread reloads when the agent writes more. In the thread, `o` opens
-the agent's raw log, and `esc` closes the thread.
-
-**Prompt** shows the last prompt the user submitted, with the session title above it.
-
-**Usage** breaks the newest request into input, cache read, cache write, and output tokens. It
-also totals recent activity over the part of the transcript that was read.
-
-**Activity** answers what the session is doing now. It leads with the recap Claude writes when
-you walk away, names the skill or MCP tool that drives the turn, and gives the length of the
-turn that just ended. Under that come the files the session edited and every tool call in the
-part of the transcript that was read, newest first. A recap is a `/config` toggle, so most
-sessions show the tool stream alone.
-
-Each tool row carries both the summary someone wrote for the call and the command itself, cut
-to one row. Press `enter` to focus the pane and scroll the list, `enter` again to open the call
-under the cursor, and `y` to put its full command on the clipboard.
+- The value takes the same shorthand as the flag, or a plain number.
+- `--context-default` overrides the file.
+- A missing or incomplete file is not an error.
 
 ## Where the data comes from
 
-`dancefloor` reads files that the clients already write. It never talks to an API, and it never
-writes to Claude Code, Codex, or Pi state.
+`dancefloor` reads files that the clients already write. It does not call an API. It does not
+write to Claude Code, Codex, or Pi state.
 
 | Source | What it gives |
 | ------ | ------------- |
-| `~/.claude/sessions/<pid>.json` | The live session registry: pid, session id, directory, name, and busy or idle status |
-| `~/.claude/projects/<dir>/<session>.jsonl` | Token usage, model, title, branch, permission mode, worktree, pull request, last prompt, and the activity stream |
-| `~/.claude/projects/<dir>/<session>/subagents/` | One `meta.json` per spawned subagent |
+| `~/.claude/sessions/<pid>.json` | The live session registry: pid, session id, directory, name, and status |
+| `~/.claude/projects/<dir>/<session>.jsonl` | Token usage, model, title, branch, permission mode, worktree, pull request, last prompt, and activity |
+| `~/.claude/projects/<dir>/<session>/subagents/` | One `meta.json` for each subagent |
 | `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` | Codex session metadata, lifecycle, messages, tools, and token events |
 | `$PI_CODING_AGENT_SESSION_DIR` (or `~/.pi/agent/sessions`) | Pi session headers, active-branch messages, model changes, and tools |
-| `ps` | CPU and resident memory per session process |
-| `wl-copy`, `xclip`, `xsel`, or `pbcopy` | Whichever is installed, to copy a tool call |
+| `ps` | CPU and memory for each session process |
+| `wl-copy`, `xclip`, `xsel`, or `pbcopy` | The first one installed, to copy a tool call |
 
-A registry file outlives the process that wrote it. Every entry is confirmed against `ps`
-before `dancefloor` reports it, so a crashed session disappears on the next refresh.
-
-Two sessions often run in the same directory, so the process id identifies a session and the
-directory does not.
-
-Codex uses `$CODEX_HOME` (default `~/.codex`). Pi uses `$PI_CODING_AGENT_DIR` (default
-`~/.pi/agent`) and `$PI_CODING_AGENT_SESSION_DIR` (default its `sessions` directory). Missing
-provider directories are treated as empty. A process without a matching transcript is shown as
-an honest process-only row where the client supports it.
+- A registry file stays after its process stops. `dancefloor` checks each entry against `ps`,
+  so a crashed session goes away on the next refresh.
+- The process id identifies a session, not the directory. Two sessions often run in the same
+  directory.
+- Codex uses `$CODEX_HOME` (default `~/.codex`).
+- Pi uses `$PI_CODING_AGENT_DIR` (default `~/.pi/agent`) and `$PI_CODING_AGENT_SESSION_DIR`
+  (default its `sessions` directory).
+- A missing provider directory counts as empty.
+- A process with no transcript shows as a process-only row, where the client supports it.
 
 ## Known limits
 
-**The context limit is worked out, not read.** Assistant messages record the base model id.
-They record `claude-opus-5` even when the session runs the `[1m]` long-context variant, so the
-window is never stated where the usage is. `dancefloor` takes the strongest signal it has, in
-this order:
+### The context limit is a best guess
 
-| Signal      | Where it comes from                                              |
-| ----------- | ---------------------------------------------------------------- |
-| Override    | `--context-limit`                                                |
-| Observed    | usage already past 200k, so the long window is a fact            |
-| Recorded    | a `cost-state` line that billed this model at `[1m]`             |
-| Configured  | the model that Claude Code settings name for the session's directory |
-| Declared    | `--context-default`, or the config file                          |
-| Assumed     | nothing said otherwise, so 200k                                  |
+Claude Code records the base model id, such as `claude-opus-5`, even for the `[1m]`
+long-context variant. So the log does not state the window. `dancefloor` uses the strongest
+signal it has, in this order:
 
-A live session often reaches none of the first four. Claude Code writes the `cost-state` line at
-shutdown, so a session that is still running has none, unless it was resumed from one that
-ended. Settings only answer when they name a `model`, and many machines choose the model with
-`/model` instead. So a fresh 1M session reads as 200k until its usage passes 200k. Set
-`default_context_limit` to stop that. A `~` after the limit means the number is the 200k
-fallback and nothing declared otherwise.
+| Signal      | Where it comes from                                                  |
+| ----------- | -------------------------------------------------------------------- |
+| Override    | `--context-limit`                                                    |
+| Observed    | Usage is already past 200k, so the window must be 1M                 |
+| Recorded    | A `cost-state` line that billed this model at `[1m]`                 |
+| Configured  | The model that Claude Code settings name for the session's directory |
+| Declared    | `--context-default`, or the config file                              |
+| Assumed     | Nothing else applies, so 200k                                        |
 
-**Rate limits are not shown.** Claude Code sends the 5-hour and 7-day figures to the status line
-hook on stdin. It does not write them to disk, so no external tool can read them.
+- A live session often has none of the first four signals:
+  - Claude Code writes `cost-state` at shutdown. A running session has none, unless it
+    resumed from a session that ended.
+  - Settings only help when they name a `model`. Many people pick the model with `/model`.
+- So a new 1M session shows as 200k until its usage passes 200k. Set
+  `default_context_limit` to fix this.
+- A `~` after the limit means it is the 200k fallback.
 
-**Recent activity covers the transcript tail.** A transcript grows without bound, so
-`dancefloor` reads only the last megabyte. The Usage pane says so. The last prompt is the one
-exception: it is searched for further back, because a long turn pushes it out of that window.
+### Rate limits are not shown
+
+Claude Code sends the 5-hour and 7-day figures to the status line hook on stdin. It does not
+write them to disk, so other tools cannot read them.
+
+### Recent activity covers only the transcript tail
+
+- A transcript can grow very large, so `dancefloor` reads only the last megabyte.
+- The Usage pane tells you this.
+- The last prompt is the exception. `dancefloor` searches further back for it, because a long
+  turn can push it out of that window.
 
 ## Develop
 
@@ -186,6 +237,6 @@ cargo test          # unit tests plus the render suite
 cargo run -- --once
 ```
 
-The render suite drives the real draw path over a test backend at six terminal sizes, including
-1x1. `ratatui` panics when a fixed-size region cannot fit, so a new panel with an unguarded
-length constraint fails those tests instead of breaking the app on a small terminal.
+- The render suite draws the real UI on a test backend at six terminal sizes, down to 1x1.
+- `ratatui` panics when a fixed-size region does not fit. So a new panel with an unguarded
+  length constraint fails the tests, and does not break the app on a small terminal.
